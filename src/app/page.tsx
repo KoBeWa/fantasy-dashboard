@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { loadJSON } from "@/lib/data";
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip } from "chart.js";
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip);
+import Link from "next/link";
 
 type TeamSeason = { season:number; team:string; wins:number; losses:number; ties?:number; pf:number; pa:number; luck?:number };
 
@@ -31,6 +32,7 @@ export default function Page() {
     <main className="p-6 space-y-6">
       <header className="flex items-center gap-3">
         <h1 className="text-2xl font-semibold">Fantasy Dashboard</h1>
+        <Link className="underline" href="seasons">Seasons</Link>
         <select className="border rounded px-2 py-1" value={season} onChange={e=>setSeason(+e.target.value)}>
           {seasons.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
