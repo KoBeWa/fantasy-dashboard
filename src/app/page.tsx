@@ -11,7 +11,7 @@ export default function Page() {
   const [teams, setTeams] = useState<TeamSeason[]>([]);
 
   useEffect(() => {
-    loadJSON<TeamSeason[]>(`/data/processed/seasons/${season}/teams.json`).then(setTeams).catch(console.error);
+    loadJSON<TeamSeason[]>(`data/processed/seasons/${season}/teams.json`).then(setTeams).catch(console.error);
   }, [season]);
 
   useEffect(() => {
