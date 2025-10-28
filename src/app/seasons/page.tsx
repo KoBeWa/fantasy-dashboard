@@ -42,7 +42,7 @@ type PlayoffRow = {
 
 export default function SeasonsPage() {
   // Auswahlzustand
-  const [season, setSeason] = useState<number>(2024);
+  const [season, setSeason] = useState<number>(2015);
   const [mode, setMode] = useState<"weekly" | "playoffs" | "regular">("weekly");
   const [week, setWeek] = useState<number>(1);
 
