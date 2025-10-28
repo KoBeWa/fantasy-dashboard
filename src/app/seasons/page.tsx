@@ -5,7 +5,21 @@ import { loadJSON } from "@/lib/data";
 type WeeklyRow = { team:string; wins:number; losses:number; ties?:number; pf:number; pa:number; pct:number; rank:number };
 type Weekly = { week:number; rows:WeeklyRow[] };
 
-type RegFinalRow = { team:string; regular_rank:number|null; record:string; pf:number|null; pa:number|null };
+type RegFinalRow = {
+  team: string;
+  regular_rank: number | null;
+  record: string;
+  wins?: number | null;
+  losses?: number | null;
+  ties?: number | null;
+  pf: number | null;
+  pa: number | null;
+  playoff_rank?: number | null;
+  manager?: string | null;
+  moves?: number | null;
+  trades?: number | null;
+  draft_position?: number | null;
+};
 type PlayoffRow  = { team:string; playoff_rank:number|null; manager?:string|null; seed?:number|null; week15?:number|null; week16?:number|null };
 
 export default function SeasonsPage() {
@@ -103,17 +117,27 @@ export default function SeasonsPage() {
               <tr>
                 <th className="text-left">#</th>
                 <th className="text-left">Team</th>
-                <th>Record</th><th>PF</th><th>PA</th>
+                <th>Record</th>
+                <th>PF</th><th>PA</th>
+                <th>Playoff</th>
+                <th>Manager</th>
+                <th>Moves</th><th>Trades</th>
+                <th>DraftPos</th>
               </tr>
             </thead>
             <tbody>
-              {currentRows.map((r:any)=>(
+              {currentRows.map((r: RegFinalRow) => (
                 <tr key={r.team} className="border-t">
-                  <td>{r.regular_rank}</td>
+                  <td>{r.regular_rank ?? ""}</td>
                   <td className="font-medium">{r.team}</td>
                   <td className="text-center">{r.record}</td>
                   <td className="text-right">{r.pf ?? ""}</td>
                   <td className="text-right">{r.pa ?? ""}</td>
+                  <td className="text-center">{r.playoff_rank ?? ""}</td>
+                  <td className="text-center">{r.manager ?? ""}</td>
+                  <td className="text-center">{r.moves ?? ""}</td>
+                  <td className="text-center">{r.trades ?? ""}</td>
+                  <td className="text-center">{r.draft_position ?? ""}</td>
                 </tr>
               ))}
             </tbody>
