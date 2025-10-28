@@ -3,11 +3,14 @@ const isProd = process.env.NODE_ENV === "production";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "export",              // ← ersetzt "next export"
+  output: "export",
   basePath: isProd ? "/fantasy-dashboard" : "",
   assetPrefix: isProd ? "/fantasy-dashboard/" : "",
   images: { unoptimized: true },
-  trailingSlash: true            // GitHub Pages mag /pfad/ → /pfad/index.html
+  trailingSlash: true,
+  env: {
+    NEXT_PUBLIC_BASE_PATH: isProd ? "/fantasy-dashboard" : ""
+  }
 };
 
 export default nextConfig;
