@@ -10,12 +10,26 @@ import {
   LinearScale,
   Tooltip,
   Legend,
+  LineController,
+  LineElement,
+  PointElement,
 } from "chart.js";
-Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
+Chart.register(
+  BarController,
+  BarElement,
+  CategoryScale,
+  LinearScale,
+  Tooltip,
+  Legend,
+  LineController,
+  LineElement,
+  PointElement
+);
 
+// --------- Datentypen ----------
 type TeamSeason = {
   season: number;
-  team: string;
+  team: string;   // Label in teams.json (Manager/Team)
   wins: number;
   losses: number;
   ties?: number;
@@ -42,27 +56,33 @@ type AggRow = {
   Sackos?: string;
 };
 
-// —— Utils ——
+type EloPoint = { Season: number; Week: number; Team: string; Elo: number; IsPlayoff: number };
+
+// --------- Utils ----------
 const SEASONS = Array.from({ length: 2025 - 2015 + 1 }, (_, i) => 2015 + i);
 const toInt = (s?: string) => (s && s.trim() !== "" ? parseInt(s, 10) : 0);
-
 function norm(s: string | null | undefined) {
   return (s ?? "")
     .toLowerCase()
-    .replace(/[\s._\-’'`"]/g, "")
+    .replace(/[\s._\\-’'`"]/g, "")
     .trim();
 }
 
 export default function Page() {
   const [season, setSeason] = useState<number>(2015);
+
+  // Saison-spezifisch
   const [teams, setTeams] = useState<TeamSeason[]>([]);
   const [finals, setFinals] = useState<RegFinalRow[] | null>(null);
 
-  // All-Time Datensätze
+  // All-Time Basis
   const [allSeasonsTeams, setAllSeasonsTeams] = useState<TeamSeason[]>([]);
   const [aggRows, setAggRows] = useState<AggRow[] | null>(null);
 
-  // ---- season-spezifische Daten ----
+  // Elo
+  const [elo, setElo] = useState<EloPoint[] | null>(null);
+
+  // ---------- Daten laden (Saison) ----------
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -72,9 +92,10 @@ export default function Page() {
       ).catch(() => null),
     ])
       .then(([t, f]) => {
-        if (cancelled) return;
-        setTeams(t);
-        setFinals(f);
+        if (!cancelled) {
+          setTeams(t);
+          setFinals(f);
+        }
       })
       .catch(console.error);
     return () => {
@@ -82,7 +103,7 @@ export default function Page() {
     };
   }, [season]);
 
-  // ---- All-Time Basis (alle seasons/teams) einmalig ----
+  // ---------- Alle Saisons (für All-Time) einmalig ----------
   useEffect(() => {
     let cancelled = false;
     Promise.all(
@@ -99,13 +120,12 @@ export default function Page() {
     };
   }, []);
 
-  // ---- Aggregated TSV (Moves/Trades/Championships/…) ----
+  // ---------- Aggregated TSV (Moves/Trades/… ) ----------
   useEffect(() => {
     let cancelled = false;
     loadTSV(`data/league/aggregated_standings.tsv`)
       .then((rows) => {
-        if (cancelled) return;
-        setAggRows(rows as AggRow[]);
+        if (!cancelled) setAggRows(rows as AggRow[]);
       })
       .catch(() => setAggRows(null));
     return () => {
@@ -113,7 +133,20 @@ export default function Page() {
     };
   }, []);
 
-  // ---- Endplatzierung (Playoff > Regular) Mapping (robust über Team+Manager) ----
+  // ---------- Elo JSON laden ----------
+  useEffect(() => {
+    let cancelled = false;
+    loadJSON<EloPoint[]>("data/league/elo_history.json")
+      .then((d) => {
+        if (!cancelled) setElo(d);
+      })
+      .catch(() => setElo(null));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ---------- Endplatzierung (Playoff > Regular) Mapping (robust über Team+Manager) ----------
   const endRankByKey = useMemo(() => {
     const m = new Map<string, number>();
     if (finals) {
@@ -140,7 +173,7 @@ export default function Page() {
     return undefined;
   }
 
-  // ---- Tabelle (rechte Spalte) nach Endplatzierung sortieren ----
+  // ---------- Dashboard-Tabelle (rechte Spalte) nach Endplatzierung sortieren ----------
   const tableRows = useMemo(() => {
     const rows = [...teams];
     rows.sort((a, b) => {
@@ -152,7 +185,7 @@ export default function Page() {
     return rows;
   }, [teams, endRankByKey]);
 
-  // ---- Chart: PF(grün) & PA(rot) nebeneinander; Reihenfolge = Endplatzierung ----
+  // ---------- PF/PA Balkendiagramm (nebeneinander; Reihenfolge = Endplatzierung) ----------
   useEffect(() => {
     const el = document.getElementById("pfpaChart") as HTMLCanvasElement | null;
     if (!el || tableRows.length === 0) return;
@@ -169,14 +202,14 @@ export default function Page() {
           {
             label: "PF",
             data: pfData,
-            backgroundColor: "rgba(34,197,94,0.6)",
+            backgroundColor: "rgba(34,197,94,0.6)",   // grün
             borderColor: "rgba(34,197,94,1)",
             borderWidth: 1,
           },
           {
             label: "PA",
             data: paData,
-            backgroundColor: "rgba(239,68,68,0.6)",
+            backgroundColor: "rgba(239,68,68,0.6)",   // rot
             borderColor: "rgba(239,68,68,1)",
             borderWidth: 1,
           },
@@ -198,12 +231,20 @@ export default function Page() {
     return () => chart.destroy();
   }, [tableRows]);
 
-  // ---- Aggregated Map (nach TeamName und ManagerName) ----
+  // ---------- Aggregated Map (Moves/Trades/Champs/…) ----------
   const aggByKey = useMemo(() => {
-    const m = new Map<string, {
-      moves: number; trades: number; championships: number; playoffs: number;
-      finals: number; toiletbowls: number; sackos: number;
-    }>();
+    const m = new Map<
+      string,
+      {
+        moves: number;
+        trades: number;
+        championships: number;
+        playoffs: number;
+        finals: number;
+        toiletbowls: number;
+        sackos: number;
+      }
+    >();
     if (!aggRows) return m;
     for (const r of aggRows) {
       const obj = {
@@ -223,25 +264,39 @@ export default function Page() {
     return m;
   }, [aggRows]);
 
-  // ---- All-Time Aggregation (Wins/Losses/Ties/PF/PA) & Merge mit Aggregated-Stats ----
+  // ---------- All-Time Aggregation ----------
   type AllTimeRow = {
     key: string;
     display: string;
-    wins: number; losses: number; ties: number;
-    pf: number; pa: number;
-    moves?: number; trades?: number;
-    championships?: number; playoffs?: number; finals?: number;
-    toiletbowls?: number; sackos?: number;
+    wins: number;
+    losses: number;
+    ties: number;
+    pf: number;
+    pa: number;
+    moves?: number;
+    trades?: number;
+    championships?: number;
+    playoffs?: number;
+    finals?: number;
+    toiletbowls?: number;
+    sackos?: number;
   };
 
   const allTimeRows: AllTimeRow[] = useMemo(() => {
     const agg = new Map<string, AllTimeRow>();
     for (const t of allSeasonsTeams) {
       const k = norm(t.team);
-      const it = agg.get(k) ?? {
-        key: k, display: t.team,
-        wins: 0, losses: 0, ties: 0, pf: 0, pa: 0,
-      };
+      const it =
+        agg.get(k) ??
+        {
+          key: k,
+          display: t.team,
+          wins: 0,
+          losses: 0,
+          ties: 0,
+          pf: 0,
+          pa: 0,
+        };
       it.display = t.team || it.display;
       it.wins += t.wins || 0;
       it.losses += t.losses || 0;
@@ -263,16 +318,91 @@ export default function Page() {
         r.toiletbowls = extra.toiletbowls;
         r.sackos = extra.sackos;
       }
-      // runde PF/PA
       r.pf = parseFloat(r.pf.toFixed(2));
       r.pa = parseFloat(r.pa.toFixed(2));
     }
 
-    // Sortierung: Wins ↓, PF ↓, Name ↑
     const out = Array.from(agg.values());
-    out.sort((a, b) => (b.wins - a.wins) || (b.pf - a.pf) || a.display.localeCompare(b.display));
+    out.sort(
+      (a, b) =>
+        b.wins - a.wins || b.pf - a.pf || a.display.localeCompare(b.display)
+    );
     return out;
   }, [allSeasonsTeams, aggByKey]);
+
+  // ---------- c) Elo-Serien für das Liniendiagramm vorbereiten ----------
+  const eloSeries = useMemo(() => {
+    if (!elo) return null;
+    const minSeason = Math.min(...elo.map((e) => e.Season));
+    // Punkte je Team sammeln
+    const byTeam = new Map<
+      string,
+      { x: number; y: number; season: number; week: number }[]
+    >();
+    for (const r of elo) {
+      const x = (r.Season - minSeason) * 20 + r.Week; // 17 Reg + ~3 PO (20 als Puffer)
+      const arr = byTeam.get(r.Team) ?? [];
+      arr.push({ x, y: r.Elo, season: r.Season, week: r.Week });
+      byTeam.set(r.Team, arr);
+    }
+    // sortiere je Team nach X
+    for (const arr of byTeam.values()) arr.sort((a, b) => a.x - b.x);
+    return Array.from(byTeam.entries()); // [ [team, points[]], ... ]
+  }, [elo]);
+
+  // ---------- d) Elo-Chart rendern (Chart.js Line) ----------
+  useEffect(() => {
+    const el = document.getElementById("eloChart") as HTMLCanvasElement | null;
+    if (!el || !eloSeries || eloSeries.length === 0) return;
+
+    const datasets = eloSeries.map(([team, pts]) => ({
+      label: team,
+      data: pts.map((p) => ({ x: p.x, y: p.y })),
+      borderWidth: 1,
+      pointRadius: 0,
+      fill: false,
+      tension: 0.15,
+    }));
+
+    const chart = new Chart(el, {
+      type: "line",
+      data: { datasets },
+      options: {
+        parsing: false,
+        responsive: true,
+        plugins: {
+          legend: { display: true, position: "bottom", labels: { boxWidth: 18 } },
+          tooltip: {
+            enabled: true,
+            callbacks: {
+              title: (items) => {
+                const it = items[0];
+                const d = it.raw as { x: number; y: number };
+                return `Woche ${Math.round(d.x)}`;
+              },
+              label: (item) => {
+                const d = item.raw as { x: number; y: number };
+                return `${item.dataset.label}: ${d.y.toFixed(0)}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: "linear",
+            title: { display: true, text: "Woche (2015 → heute)" },
+            grid: { display: true },
+          },
+          y: {
+            title: { display: true, text: "Elo" },
+            grid: { display: true },
+          },
+        },
+      },
+    });
+
+    return () => chart.destroy();
+  }, [eloSeries]);
 
   const seasons = useMemo(() => SEASONS, []);
 
@@ -287,7 +417,9 @@ export default function Page() {
           onChange={(e) => setSeason(+e.target.value)}
         >
           {seasons.map((y) => (
-            <option key={y} value={y}>{y}</option>
+            <option key={y} value={y}>
+              {y}
+            </option>
           ))}
         </select>
       </header>
@@ -296,7 +428,7 @@ export default function Page() {
         {/* PF & PA Chart (geordnet nach Endplatzierung) */}
         <article className="border rounded p-4">
           <h2 className="font-semibold mb-2">Points For & Against (nach Endplatzierung)</h2>
-        <canvas id="pfpaChart" />
+          <canvas id="pfpaChart" />
         </article>
 
         {/* Standings-Tabelle (nach Playoffs/Regular-Endrank sortiert) */}
@@ -324,6 +456,13 @@ export default function Page() {
               ))}
             </tbody>
           </table>
+          {finals && endRankByKey.size === 0 && (
+            <p className="text-xs text-gray-600 mt-2">
+              Hinweis: Keine finalen Platzierungen gemappt. Prüfe, ob{" "}
+              <code>regular_final_standings.json</code> für {season} vorhanden ist und Team-/Manager-Namen
+              zu <code>teams.json</code> passen.
+            </p>
+          )}
         </article>
 
         {/* All-Time Tabelle */}
@@ -369,11 +508,21 @@ export default function Page() {
               </tbody>
             </table>
           </div>
-
           {aggRows == null && (
             <p className="text-xs text-gray-600 mt-2">
-              Hinweis: <code>aggregated_standings.tsv</code> wurde nicht gefunden oder konnte nicht geladen werden.
-              Prüfe, ob der Workflow sie nach <code>public/data/league/</code> kopiert.
+              Hinweis: <code>aggregated_standings.tsv</code> wurde nicht gefunden. Kopiere sie im Workflow
+              nach <code>public/data/league/aggregated_standings.tsv</code>.
+            </p>
+          )}
+        </article>
+
+        {/* All-Time Elo Chart */}
+        <article className="border rounded p-4 xl:col-span-2">
+          <h2 className="font-semibold mb-2">All-Time Elo (wöchentlich)</h2>
+          <canvas id="eloChart" />
+          {!elo && (
+            <p className="text-sm text-gray-600 mt-2">
+              Keine Elo-Daten gefunden. Stelle sicher, dass <code>public/data/league/elo_history.json</code> existiert.
             </p>
           )}
         </article>
