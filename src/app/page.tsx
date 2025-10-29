@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import Nav from "@/components/Nav"; // falls du Nav noch nicht nutzt, kannst du diese Zeile entfernen
+import Nav from "../components/Nav"; // falls du Nav noch nicht nutzt, kannst du diese Zeile entfernen
 import { loadJSON } from "@/lib/data";
 import {
   Chart,
