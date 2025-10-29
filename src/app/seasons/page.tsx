@@ -41,7 +41,7 @@ type PlayoffRow = {
   week16?: number | null;
 };
 
-// ---------- Hilfsfunktionen für kumulative Tabelle ----------
+// ---------- Hilfsfunktionen für kumulative Tabelle & Tiebreaker ----------
 type CumAgg = { wins: number; losses: number; ties: number; pf: number; pa: number };
 type CumRow = {
   team: string;
@@ -55,7 +55,8 @@ type CumRow = {
   delta?: number | null; // vs. Vorwoche
 };
 
-function buildCumulative(weekly: Weekly[] | null, uptoWeek: number): CumRow[] {
+/** Baue kumulative Zahlen (W/L/T, PF/PA) bis inkl. uptoWeek aus den weekly-Snapshots. */
+function buildCumBase(weekly: Weekly[] | null, uptoWeek: number): CumRow[] {
   if (!weekly || weekly.length === 0) return [];
   const agg = new Map<string, CumAgg>();
 
@@ -87,14 +88,88 @@ function buildCumulative(weekly: Weekly[] | null, uptoWeek: number): CumRow[] {
     };
   });
 
-  // Sortierung: W desc, PF desc, Team asc
-  rows.sort((a, b) => {
-    if (b.wins !== a.wins) return b.wins - a.wins;
-    if (b.pf !== a.pf) return b.pf - a.pf;
-    return a.team.localeCompare(b.team);
-  });
-  rows.forEach((r, i) => (r.rank = i + 1));
   return rows;
+}
+
+/** Liefert Map team->Siege in der Mini-Liga (nur vs. groupTeams) bis inkl. uptoWeek. */
+function computeH2HWinsMap(
+  groupTeams: string[],
+  matchups: Matchup[] | null,
+  uptoWeek: number
+): Map<string, number> {
+  const set = new Set(groupTeams);
+  const wins = new Map<string, number>();
+  groupTeams.forEach(t => wins.set(t, 0));
+
+  if (!matchups) return wins;
+
+  for (const m of matchups) {
+    if (m.is_playoff) continue; // nur Regular Season
+    if (m.week > uptoWeek) continue;
+    const { home_team: ht, away_team: at } = m;
+    if (!set.has(ht) || !set.has(at)) continue;
+
+    const hp = m.home_points ?? 0;
+    const ap = m.away_points ?? 0;
+    if (hp === ap) continue; // Unentschieden zählt hier nicht als Sieg
+
+    if (hp > ap) wins.set(ht, (wins.get(ht) ?? 0) + 1);
+    else wins.set(at, (wins.get(at) ?? 0) + 1);
+  }
+
+  return wins;
+}
+
+/** Sortiert rows nach Season-Regeln:
+ * - 2015–2021: Wins ↓, dann Head-to-Head (Mini-Liga-Siege) ↓, dann PF ↓, dann Name ↑
+ * - ab 2022  : Wins ↓, dann PF ↓, dann Name ↑
+ */
+function sortWithLeagueRules(
+  rows: CumRow[],
+  season: number,
+  matchups: Matchup[] | null,
+  uptoWeek: number
+): CumRow[] {
+  // Grundsortierung nach Wins ↓ (damit wir Tie-Gruppen finden)
+  rows.sort((a, b) => b.wins - a.wins || b.pf - a.pf || a.team.localeCompare(b.team));
+
+  if (season >= 2022) {
+    // ab 2022: Wins ↓, PF ↓, Name ↑ (ist durch Grundsort schon so)
+    return rows;
+  }
+
+  // 2015–2021: Gewinne → Head-to-Head innerhalb Tie-Gruppe → PF → Name
+  // Finde Gruppen mit identischen Wins
+  let i = 0;
+  const out: CumRow[] = [];
+  while (i < rows.length) {
+    let j = i + 1;
+    while (j < rows.length && rows[j].wins === rows[i].wins) j++;
+
+    const group = rows.slice(i, j);
+    if (group.length === 1) {
+      out.push(group[0]);
+    } else {
+      const teams = group.map(g => g.team);
+      const h2hWins = computeH2HWinsMap(teams, matchups, uptoWeek);
+
+      group.sort((a, b) => {
+        // zuerst Head-to-Head-Siege innerhalb der Gruppe
+        const aw = h2hWins.get(a.team) ?? 0;
+        const bw = h2hWins.get(b.team) ?? 0;
+        if (bw !== aw) return bw - aw;
+        // dann PF
+        if (b.pf !== a.pf) return b.pf - a.pf;
+        // dann Name
+        return a.team.localeCompare(b.team);
+      });
+
+      out.push(...group);
+    }
+    i = j;
+  }
+
+  return out;
 }
 
 function annotateDelta(curr: CumRow[], prev: CumRow[] | null): CumRow[] {
@@ -155,12 +230,23 @@ export default function SeasonsPage() {
     return (matchups ?? []).filter((m) => m.week === week && !m.is_playoff);
   }, [matchups, week]);
 
-  // Kumulativ + Delta
+  // Kumulativ + Sortierlogik je Saison + Delta
   const cumRows: CumRow[] = useMemo(() => {
-    const curr = buildCumulative(weekly, week);
-    const prev = week > 1 ? buildCumulative(weekly, week - 1) : null;
-    return annotateDelta(curr, prev);
-  }, [weekly, week]);
+    // Basiszahlen bis inkl. Week
+    const base = buildCumBase(weekly, week);
+    // Sortierung je Saisonregel, inkl. Head-to-Head (2015–2021)
+    const sorted = sortWithLeagueRules(base, season, matchups, week);
+    // Ränge vergeben
+    sorted.forEach((r, i) => (r.rank = i + 1));
+    // Vergleich zur Vorwoche (mit derselben Sortierlogik)
+    const prevBase = week > 1 ? buildCumBase(weekly, week - 1) : null;
+    let prevSorted: CumRow[] | null = null;
+    if (prevBase) {
+      prevSorted = sortWithLeagueRules(prevBase, season, matchups, week - 1);
+      prevSorted.forEach((r, i) => (r.rank = i + 1));
+    }
+    return annotateDelta(sorted, prevSorted);
+  }, [weekly, week, season, matchups]);
 
   const seasons = useMemo(() => Array.from({ length: 2025 - 2015 + 1 }, (_, i) => 2015 + i), []);
 
@@ -384,3 +470,4 @@ export default function SeasonsPage() {
     </main>
   );
 }
+
