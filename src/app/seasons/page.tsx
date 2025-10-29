@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { loadJSON } from "@/lib/data";
 import MatchupCard, { type Matchup } from "../../components/MatchupCard";
+import Nav from "../../components/Nav";
 
 // ---------- Typen ----------
 type WeeklyRow = {
