@@ -254,7 +254,7 @@ export default function SeasonsPage() {
     <main className="p-6 space-y-6">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold">Seasons</h1>
-
+        <Nav /> {/* NEU */}
         {/* Season-Auswahl */}
         <select
           className="border rounded px-2 py-1"
