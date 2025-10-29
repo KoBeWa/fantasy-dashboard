@@ -49,17 +49,21 @@ export default function Page() {
         <article className="border rounded p-4">
           <h2 className="font-semibold mb-2">Teams (Saison)</h2>
           <table className="w-full text-sm">
-            <thead><tr>
-              <th className="text-left">Team</th><th>W</th><th>L</th><th>PF</th><th>PA</th>
-            </tr></thead>
+            <thead>
+              <tr>
+                <th className="text-left">Team</th>
+                <th>W</th><th>L</th>
+                <th>PF</th><th>PA</th>
+              </tr>
+            </thead>
             <tbody>
               {teams.map(r=>(
                 <tr key={`${r.team}-${r.season}`} className="border-t">
                   <td>{r.team}</td>
                   <td className="text-center">{r.wins}</td>
                   <td className="text-center">{r.losses}</td>
-                  <td className="text-right">{r.pf.toFixed(2)}</td>
-                  <td className="text-right">{r.pa.toFixed(2)}</td>
+                  <td className="text-right font-medium text-green-600">{r.pf.toFixed(2)}</td>
+                  <td className="text-right font-medium text-red-600">{r.pa.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
