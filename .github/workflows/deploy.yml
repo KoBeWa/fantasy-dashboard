@@ -26,6 +26,13 @@ jobs:
           rsync -a ff-data/public/data/processed/ public/data/processed/ || true
           find public/data/processed -maxdepth 2 -type f | head -n 10
 
+      # NEU: Aggregated TSV in die Site kopieren
+      - name: Copy aggregated standings TSV
+        run: |
+          mkdir -p public/data/league
+          cp ff-data/output/history-standings/aggregated_standings.tsv public/data/league/aggregated_standings.tsv || true
+
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with: { node-version: "20", cache: "npm" }
