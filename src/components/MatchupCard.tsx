@@ -2,10 +2,10 @@
 import React from "react";
 
 type LineupEntry = {
-  slot: string;          // z.B. "RB", "WR", "W/R", "K", "QB", "DEF", "BN"
-  player_raw: string;    // "P. Manning QB - DEN"
-  pos?: string | null;   // "QB", "RB" ...
-  points: number | null; // 0-xxx
+  slot: string;
+  player_raw: string;
+  pos?: string | null;
+  points: number | null;
 };
 
 export type Matchup = {
@@ -25,14 +25,13 @@ function fmtPts(n: number | null | undefined) {
   return n.toFixed(2);
 }
 
-// Wir labeln doppelte Slots (RB/WR) als RB1/RB2, WR1/WR2 etc. für sauberes Alignment
 function labelStarters(starters: LineupEntry[]) {
   const counters: Record<string, number> = {};
   return starters.map((e) => {
     const key = e.slot.toUpperCase();
     const idx = (counters[key] = (counters[key] ?? 0) + 1);
     let label = key;
-    if (key === "RB" || key === "WR") label = `${key}${idx}`; // RB1, RB2 / WR1, WR2
+    if (key === "RB" || key === "WR") label = `${key}${idx}`; // RB1/2, WR1/2
     return { ...e, _label: label };
   }) as (LineupEntry & { _label: string })[];
 }
@@ -78,10 +77,8 @@ export default function MatchupCard({ m }: { m: Matchup }) {
   const leftBy = Object.fromEntries(left.map((e) => [e._label, e]));
   const rightBy = Object.fromEntries(right.map((e) => [e._label, e]));
 
-  const isHomeWin =
-    (m.home_points ?? -Infinity) > (m.away_points ?? -Infinity);
-  const isAwayWin =
-    (m.away_points ?? -Infinity) > (m.home_points ?? -Infinity);
+  const isHomeWin = (m.home_points ?? -Infinity) > (m.away_points ?? -Infinity);
+  const isAwayWin = (m.away_points ?? -Infinity) > (m.home_points ?? -Infinity);
 
   return (
     <article className="rounded-xl border p-4">
@@ -102,7 +99,6 @@ export default function MatchupCard({ m }: { m: Matchup }) {
         </div>
       </header>
 
-      {/* Starters – side-by-side */}
       <div className="overflow-auto">
         <table className="w-full text-sm">
           <thead>
@@ -139,7 +135,6 @@ export default function MatchupCard({ m }: { m: Matchup }) {
         </table>
       </div>
 
-      {/* Bench */}
       <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
           <h4 className="mb-1 font-medium">Bench – {m.home_team}</h4>
@@ -153,3 +148,4 @@ export default function MatchupCard({ m }: { m: Matchup }) {
     </article>
   );
 }
+
