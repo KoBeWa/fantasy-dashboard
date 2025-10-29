@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { loadJSON } from "@/lib/data";
-import MatchupCard, { type Matchup } from "@/components/MatchupCard";
+import MatchupCard, { type Matchup } from "../../components/MatchupCard";
 
 // ---------- Typen ----------
 type WeeklyRow = {
