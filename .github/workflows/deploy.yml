@@ -36,6 +36,17 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with: { node-version: "20", cache: "npm" }
+        
+      - name: Fetch Elo + Aggregated data from FF-Scraping
+        run: |
+          mkdir -p public/data/league
+          curl -fL \
+            -o public/data/league/elo_history.json \
+            https://raw.githubusercontent.com/KoBeWa/FF-Scraping/master/public/data/league/elo_history.json
+          curl -fL \
+            -o public/data/league/aggregated_standings.tsv \
+            https://raw.githubusercontent.com/KoBeWa/FF-Scraping/master/output/history-standings/aggregated_standings.tsv
+          ls -l public/data/league
 
       - run: npm ci
       - run: npm run build     # erzeugt .next/export
