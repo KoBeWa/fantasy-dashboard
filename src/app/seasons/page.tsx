@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { loadJSON } from "@/lib/data";
+import MatchupCard, { type Matchup } from "@/components/MatchupCard";
 
 // ---------- Typen ----------
 type WeeklyRow = {
@@ -50,6 +51,7 @@ export default function SeasonsPage() {
   const [weekly, setWeekly] = useState<Weekly[] | null>(null);
   const [regFinal, setRegFinal] = useState<RegFinalRow[] | null>(null);
   const [playoffs, setPlayoffs] = useState<PlayoffRow[] | null>(null);
+  const [matchups, setMatchups] = useState<Matchup[] | null>(null);
 
   // Daten laden, sobald Season wechselt
   useEffect(() => {
@@ -58,11 +60,13 @@ export default function SeasonsPage() {
       loadJSON<Weekly[]>(`data/processed/seasons/${season}/weekly_standings.json`).catch(() => null),
       loadJSON<RegFinalRow[]>(`data/processed/seasons/${season}/regular_final_standings.json`).catch(() => null),
       loadJSON<PlayoffRow[]>(`data/processed/seasons/${season}/playoffs_standings.json`).catch(() => null),
-    ]).then(([w, r, p]) => {
+      loadJSON<Matchup[]>(`data/processed/seasons/${season}/matchups.json`).catch(() => null),
+    ]).then(([w, r, p, m]) => {
       if (cancelled) return;
       setWeekly(w);
       setRegFinal(r);
       setPlayoffs(p);
+      setMatchups(m);
       if (w && w.length > 0) setWeek(w[0].week);
     });
     return () => {
@@ -82,10 +86,14 @@ export default function SeasonsPage() {
   const regRows: RegFinalRow[] = useMemo(() => regFinal ?? [], [regFinal]);
   const poRows: PlayoffRow[] = useMemo(() => playoffs ?? [], [playoffs]);
 
+  const weekMatchups: Matchup[] = useMemo(() => {
+    return (matchups ?? []).filter((m) => m.week === week && !m.is_playoff);
+  }, [matchups, week]);
+
   const seasons = useMemo(() => Array.from({ length: 2025 - 2015 + 1 }, (_, i) => 2015 + i), []);
 
   return (
-    <main className="p-6 space-y-4">
+    <main className="p-6 space-y-6">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold">Seasons</h1>
 
@@ -140,38 +148,51 @@ export default function SeasonsPage() {
         )}
       </header>
 
-      {/* WEEKLY */}
+      {/* WEEKLY – Tabelle */}
       {mode === "weekly" && (
-        <section className="overflow-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr>
-                <th className="text-left">#</th>
-                <th className="text-left">Team</th>
-                <th>W</th>
-                <th>L</th>
-                <th>T</th>
-                <th>PF</th>
-                <th>PA</th>
-                <th>Pct</th>
-              </tr>
-            </thead>
-            <tbody>
-              {weeklyRows.map((r) => (
-                <tr key={r.team} className="border-t">
-                  <td>{r.rank}</td>
-                  <td className="font-medium">{r.team}</td>
-                  <td className="text-center">{r.wins}</td>
-                  <td className="text-center">{r.losses}</td>
-                  <td className="text-center">{r.ties ?? 0}</td>
-                  <td className="text-right">{r.pf?.toFixed(2)}</td>
-                  <td className="text-right">{r.pa?.toFixed(2)}</td>
-                  <td className="text-right">{(r.pct * 100).toFixed(1)}%</td>
+        <>
+          <section className="overflow-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left">#</th>
+                  <th className="text-left">Team</th>
+                  <th>W</th>
+                  <th>L</th>
+                  <th>T</th>
+                  <th>PF</th>
+                  <th>PA</th>
+                  <th>Pct</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+              </thead>
+              <tbody>
+                {weeklyRows.map((r) => (
+                  <tr key={r.team} className="border-t">
+                    <td>{r.rank}</td>
+                    <td className="font-medium">{r.team}</td>
+                    <td className="text-center">{r.wins}</td>
+                    <td className="text-center">{r.losses}</td>
+                    <td className="text-center">{r.ties ?? 0}</td>
+                    <td className="text-right">{r.pf?.toFixed(2)}</td>
+                    <td className="text-right">{r.pa?.toFixed(2)}</td>
+                    <td className="text-right">{(r.pct * 100).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          {/* WEEKLY – Matchups der Woche */}
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold">Matchups – Week {week}</h2>
+            {weekMatchups.length === 0 && (
+              <p className="text-sm text-gray-600">Keine Matchups gefunden.</p>
+            )}
+            {weekMatchups.map((m) => (
+              <MatchupCard key={`${m.week}-${m.home_team}-${m.away_team}`} m={m} />
+            ))}
+          </section>
+        </>
       )}
 
       {/* REGULAR (FINAL) */}
@@ -193,7 +214,7 @@ export default function SeasonsPage() {
               </tr>
             </thead>
             <tbody>
-              {regRows.map((r) => (
+              {(regRows).map((r) => (
                 <tr key={r.team} className="border-t">
                   <td>{r.regular_rank ?? ""}</td>
                   <td className="font-medium">{r.team}</td>
