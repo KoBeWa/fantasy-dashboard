@@ -41,6 +41,71 @@ type PlayoffRow = {
   week16?: number | null;
 };
 
+// ---------- Hilfsfunktionen für kumulative Tabelle ----------
+type CumAgg = { wins: number; losses: number; ties: number; pf: number; pa: number };
+type CumRow = {
+  team: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  pf: number;
+  pa: number;
+  pct: number;
+  rank: number;
+  delta?: number | null; // vs. Vorwoche
+};
+
+function buildCumulative(weekly: Weekly[] | null, uptoWeek: number): CumRow[] {
+  if (!weekly || weekly.length === 0) return [];
+  const agg = new Map<string, CumAgg>();
+
+  for (const block of weekly) {
+    if (block.week > uptoWeek) continue;
+    for (const r of block.rows) {
+      const a = agg.get(r.team) ?? { wins: 0, losses: 0, ties: 0, pf: 0, pa: 0 };
+      a.wins += r.wins || 0;
+      a.losses += r.losses || 0;
+      a.ties += r.ties || 0;
+      a.pf += r.pf || 0;
+      a.pa += r.pa || 0;
+      agg.set(r.team, a);
+    }
+  }
+
+  const rows: CumRow[] = Array.from(agg.entries()).map(([team, v]) => {
+    const games = v.wins + v.losses + v.ties;
+    const pct = games > 0 ? (v.wins + 0.5 * v.ties) / games : 0;
+    return {
+      team,
+      wins: v.wins,
+      losses: v.losses,
+      ties: v.ties,
+      pf: parseFloat(v.pf.toFixed(2)),
+      pa: parseFloat(v.pa.toFixed(2)),
+      pct: parseFloat(pct.toFixed(4)),
+      rank: 0
+    };
+  });
+
+  // Sortierung: W desc, PF desc, Team asc
+  rows.sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    if (b.pf !== a.pf) return b.pf - a.pf;
+    return a.team.localeCompare(b.team);
+  });
+  rows.forEach((r, i) => (r.rank = i + 1));
+  return rows;
+}
+
+function annotateDelta(curr: CumRow[], prev: CumRow[] | null): CumRow[] {
+  if (!prev || prev.length === 0) return curr.map((r) => ({ ...r, delta: null }));
+  const prevRank = new Map(prev.map((r) => [r.team, r.rank]));
+  return curr.map((r) => {
+    const pr = prevRank.get(r.team);
+    return { ...r, delta: pr != null ? pr - r.rank : null };
+  });
+}
+
 export default function SeasonsPage() {
   // Auswahlzustand
   const [season, setSeason] = useState<number>(2015);
@@ -89,6 +154,13 @@ export default function SeasonsPage() {
   const weekMatchups: Matchup[] = useMemo(() => {
     return (matchups ?? []).filter((m) => m.week === week && !m.is_playoff);
   }, [matchups, week]);
+
+  // Kumulativ + Delta
+  const cumRows: CumRow[] = useMemo(() => {
+    const curr = buildCumulative(weekly, week);
+    const prev = week > 1 ? buildCumulative(weekly, week - 1) : null;
+    return annotateDelta(curr, prev);
+  }, [weekly, week]);
 
   const seasons = useMemo(() => Array.from({ length: 2025 - 2015 + 1 }, (_, i) => 2015 + i), []);
 
@@ -148,10 +220,57 @@ export default function SeasonsPage() {
         )}
       </header>
 
-      {/* WEEKLY – Tabelle */}
+      {/* WEEKLY */}
       {mode === "weekly" && (
         <>
+          {/* Kumulative Tabelle bis inkl. Week */}
           <section className="overflow-auto">
+            <h2 className="text-lg font-semibold mb-2">Cumulative Standings (≤ Week {week})</h2>
+            <table className="w-full text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left">#</th>
+                  <th className="text-left">Team</th>
+                  <th>W</th>
+                  <th>L</th>
+                  <th>T</th>
+                  <th>PF</th>
+                  <th>PA</th>
+                  <th>Pct</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cumRows.map((r) => {
+                  const delta = r.delta ?? 0;
+                  const showDelta = delta !== 0;
+                  const sign = delta > 0 ? "+" : "";
+                  return (
+                    <tr key={`cum-${r.team}`} className="border-t">
+                      <td>{r.rank}</td>
+                      <td className="font-medium">
+                        {r.team}{" "}
+                        {showDelta && (
+                          <span className={`text-xs ${delta > 0 ? "text-green-600" : "text-red-600"}`}>
+                            ({sign}{delta})
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-center">{r.wins}</td>
+                      <td className="text-center">{r.losses}</td>
+                      <td className="text-center">{r.ties}</td>
+                      <td className="text-right">{r.pf.toFixed(2)}</td>
+                      <td className="text-right">{r.pa.toFixed(2)}</td>
+                      <td className="text-right">{(r.pct * 100).toFixed(1)}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </section>
+
+          {/* Snapshot nur der ausgewählten Woche */}
+          <section className="overflow-auto">
+            <h2 className="text-lg font-semibold mb-2">Week {week} Snapshot</h2>
             <table className="w-full text-sm">
               <thead>
                 <tr>
@@ -167,7 +286,7 @@ export default function SeasonsPage() {
               </thead>
               <tbody>
                 {weeklyRows.map((r) => (
-                  <tr key={r.team} className="border-t">
+                  <tr key={`w-${r.team}`} className="border-t">
                     <td>{r.rank}</td>
                     <td className="font-medium">{r.team}</td>
                     <td className="text-center">{r.wins}</td>
