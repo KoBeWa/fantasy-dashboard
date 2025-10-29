@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import Nav from "../components/Nav"; // ggf. entfernen, wenn du Nav nicht nutzt
+import Nav from "../components/Nav"; // entferne diese Zeile, falls du Nav nicht nutzt
 import { loadJSON } from "@/lib/data";
 import {
   Chart,
@@ -15,7 +15,7 @@ Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, L
 
 type TeamSeason = {
   season: number;
-  team: string;
+  team: string;   // Label in teams.json (oft Manager/Owner)
   wins: number;
   losses: number;
   ties?: number;
@@ -24,10 +24,19 @@ type TeamSeason = {
 };
 
 type RegFinalRow = {
-  team: string;
+  team: string;                 // TeamName aus TSV (regular_final_standings.json)
   regular_rank: number | null;
   playoff_rank?: number | null;
+  manager?: string | null;      // ManagerName aus TSV, falls vorhanden
 };
+
+// ————— Normalisierung: Kleinschreibung, Whitespace & Satzzeichen entfernen
+function norm(s: string | null | undefined) {
+  return (s ?? "")
+    .toLowerCase()
+    .replace(/[\s._\-’'`"]/g, "")
+    .trim();
+}
 
 export default function Page() {
   const [season, setSeason] = useState<number>(2015);
@@ -54,46 +63,78 @@ export default function Page() {
     };
   }, [season]);
 
-  // Endplatzierung (Playoff>Regular)
-  const endRankMap = useMemo(() => {
+  // Rank-Index (Playoff > Regular) – robustes Matching:
+  // Wir legen Keys für TeamName **und** ManagerName an, jeweils normalisiert.
+  const endRankByKey = useMemo(() => {
     const m = new Map<string, number>();
     if (finals) {
       for (const r of finals) {
         const end = (r.playoff_rank ?? undefined) ?? (r.regular_rank ?? undefined);
-        if (end !== undefined && end !== null) m.set(r.team, end);
+        if (end == null) continue;
+        if (r.team) m.set(norm(r.team), end);
+        if (r.manager) m.set(norm(r.manager), end);
       }
     }
     return m;
   }, [finals]);
 
-  // Tabelle nach Endplatzierung sortieren (nur Anzeige)
+  // Helfer: Endrank zu einem Tabellenlabel holen (probiert Team-Label, dann Teile davon)
+  function getEndRankForLabel(label: string): number | undefined {
+    const key = norm(label);
+    let hit = endRankByKey.get(key);
+    if (hit != null) return hit;
+
+    // Fallback: manchmal enthalten Labels Zusätze (z. B. Emojis / Suffixe)
+    // Wir testen einfache Splits.
+    for (const part of label.split(/[|/()\[\],]+/)) {
+      const k = norm(part);
+      if (!k) continue;
+      hit = endRankByKey.get(k);
+      if (hit != null) return hit;
+    }
+    return undefined;
+  }
+
+  // Tabelle nach finaler Platzierung sortieren (Playoff > Regular), sonst Alphabet
   const tableRows = useMemo(() => {
     const rows = [...teams];
     rows.sort((a, b) => {
-      const ra = endRankMap.get(a.team) ?? Number.POSITIVE_INFINITY;
-      const rb = endRankMap.get(b.team) ?? Number.POSITIVE_INFINITY;
+      const ra = getEndRankForLabel(a.team) ?? Number.POSITIVE_INFINITY;
+      const rb = getEndRankForLabel(b.team) ?? Number.POSITIVE_INFINITY;
       if (ra !== rb) return ra - rb;
       return a.team.localeCompare(b.team);
     });
     return rows;
-  }, [teams, endRankMap]);
+  }, [teams, endRankByKey]);
 
-  // Chart: PF & PA nebeneinander, Reihenfolge = Tabelle (Endplatzierung)
+  // Chart: PF(grün) & PA(rot) nebeneinander, Reihenfolge = Tabelle (Endplatzierung)
   useEffect(() => {
     const el = document.getElementById("pfpaChart") as HTMLCanvasElement | null;
     if (!el || tableRows.length === 0) return;
 
-    const labels = tableRows.map(t => t.team);
-    const pfData = tableRows.map(t => t.pf);
-    const paData = tableRows.map(t => t.pa);
+    const labels = tableRows.map((t) => t.team);
+    const pfData = tableRows.map((t) => t.pf);
+    const paData = tableRows.map((t) => t.pa);
 
     const chart = new Chart(el, {
       type: "bar",
       data: {
         labels,
         datasets: [
-          { label: "PF", data: pfData },
-          { label: "PA", data: paData },
+          {
+            label: "PF",
+            data: pfData,
+            backgroundColor: "rgba(34,197,94,0.6)",   // grün
+            borderColor: "rgba(34,197,94,1)",
+            borderWidth: 1,
+          },
+          {
+            label: "PA",
+            data: paData,
+            backgroundColor: "rgba(239,68,68,0.6)",   // rot
+            borderColor: "rgba(239,68,68,1)",
+            borderWidth: 1,
+          },
         ],
       },
       options: {
@@ -136,13 +177,13 @@ export default function Page() {
       </header>
 
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* PF & PA Chart (geordnet nach Endplatzierung) */}
+        {/* PF & PA Chart (geordnet nach finaler Platzierung) */}
         <article className="border rounded p-4">
           <h2 className="font-semibold mb-2">Points For & Against (nach Endplatzierung)</h2>
           <canvas id="pfpaChart" />
         </article>
 
-        {/* Standings-Tabelle (nach Playoffs / Regular-Endrank sortiert) */}
+        {/* Standings-Tabelle (nach Playoffs/Regular-Endrank sortiert) */}
         <article className="border rounded p-4">
           <h2 className="font-semibold mb-2">Teams (Saison)</h2>
           <table className="w-full text-sm">
@@ -168,11 +209,12 @@ export default function Page() {
             </tbody>
           </table>
 
-          {endRankMap.size === 0 && (
+          {/* Hinweis, falls Mapping fehlt */}
+          {finals && endRankByKey.size === 0 && (
             <p className="text-xs text-gray-600 mt-2">
-              Hinweis: Keine finalen Platzierungen gefunden. Die Tabelle (und Chart-Reihenfolge)
-              nutzen dann eine Fallback-Sortierung. Stelle sicher, dass{" "}
-              <code>regular_final_standings.json</code> für {season} vorhanden ist.
+              Hinweis: Keine finalen Platzierungen gemappt. Prüfe, ob die Datei{" "}
+              <code>regular_final_standings.json</code> für {season} existiert und die Team-/Manager-Namen
+              zu den Labels in <code>teams.json</code> passen.
             </p>
           )}
         </article>
