@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 
 export default function Nav() {
   const pathname = usePathname();
-  const item = (href: string, label: string) => {
+  const Item = ({ href, label }: { href: string; label: string }) => {
     const active = pathname === href || pathname?.startsWith(href + "/");
     return (
       <Link
@@ -17,8 +17,8 @@ export default function Nav() {
   };
   return (
     <nav className="flex items-center gap-2">
-      {item("/", "Dashboard")}
-      {item("/seasons", "Seasons")}
+      <Item href="/" label="Dashboard" />
+      <Item href="/seasons" label="Seasons" />
     </nav>
   );
 }
