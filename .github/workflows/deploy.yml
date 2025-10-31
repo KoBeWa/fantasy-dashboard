@@ -47,6 +47,14 @@ jobs:
             -o public/data/league/aggregated_standings.tsv \
             https://raw.githubusercontent.com/KoBeWa/FF-Scraping/master/output/history-standings/aggregated_standings.tsv
           ls -l public/data/league
+          
+      - name: Fetch medals data (players.tsv) from FF-Scraping
+        run: |
+          mkdir -p public/data/league
+          curl -fL \
+            -o public/data/league/players.tsv \
+            https://raw.githubusercontent.com/KoBeWa/FF-Scraping/master/output/players.tsv
+          ls -l public/data/league
 
       - run: npm ci
       - run: npm run build     # erzeugt .next/export
