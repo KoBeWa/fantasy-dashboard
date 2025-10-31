@@ -103,20 +103,26 @@ function getKeyForRow(row: any): string {
   return norm(lbl);
 }
 
-// stabile Farbe aus Team-/Owner-Namen erzeugen
-function colorFromString(s: string, alpha = 1): string {
-  // simpler Hash → 0..359
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
-  // HSL in gut sichtbarer Range; alpha optional
-  const base = `hsl(${h}, 70%, 45%)`;
-  if (alpha >= 1) return base.replace("hsl", "hsl"); // opaque
-  // Chart.js versteht rgba() besser für Transparenz:
-  // kurz HSL → RGB nähern (kleine Utility)
-  function hslToRgb(h:number,s:number,l:number){s/=100;l/=100;const k=(n:number)=>(n+h/30)%12;const a=s*Math.min(l,1-l);const f=(n:number)=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));return [Math.round(255*f(0)),Math.round(255*f(8)),Math.round(255*f(4))];}
-  const [r,g,b]=hslToRgb(h,70,45);
-  return `rgba(${r},${g},${b},${alpha})`;
+// Manuelles Farb-Mapping pro Team/Owner
+const COLOR_MAP: Record<string, { stroke: string; fill: string }> = {
+  Benni:   { stroke: "#00B050", fill: "rgba(0,176,80,0.15)" },
+  Simi:    { stroke: "#0070C0", fill: "rgba(0,112,192,0.15)" },
+  Kessi:   { stroke: "#FFC000", fill: "rgba(255,192,0,0.15)" },
+  Tommy:   { stroke: "#7030A0", fill: "rgba(112,48,160,0.15)" },
+  Ritz:    { stroke: "#FF0000", fill: "rgba(255,0,0,0.15)" },
+  Marv:    { stroke: "#00B0F0", fill: "rgba(0,176,240,0.15)" },
+  Erik:    { stroke: "#92D050", fill: "rgba(146,208,80,0.15)" },
+  Juschka: { stroke: "#C00000", fill: "rgba(192,0,0,0.15)" },
+};
+
+// Fallback-Funktion falls jemand nicht in der Liste steht
+function getColorForTeam(team: string) {
+  const c = COLOR_MAP[team];
+  if (c) return c;
+  // neutrale Farbe fallback
+  return { stroke: "#999999", fill: "rgba(153,153,153,0.15)" };
 }
+
 
 /* ===================== Component ===================== */
 export default function Page() {
@@ -424,19 +430,19 @@ export default function Page() {
   if (!el || !eloSeries || eloSeries.length === 0) return;
 
   const datasets = eloSeries.map(([team, pts]) => {
-    const stroke = colorFromString(team, 1);
-    const fill   = colorFromString(team, 0.12);
+    const { stroke, fill } = getColorForTeam(team);
     return {
       label: team,
       data: pts.map((p) => ({ x: p.x, y: p.y })),
       borderColor: stroke,
       backgroundColor: fill,
-      borderWidth: 3,        // << dicker
+      borderWidth: 3,
       pointRadius: 0,
       fill: false,
       tension: 0.2,
     };
   });
+
 
   const chart = new Chart(el, {
     type: "line",
