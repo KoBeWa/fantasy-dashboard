@@ -160,7 +160,7 @@ export default function MedalsPage() {
           <span className="px-2 py-0.5 rounded" style={{ background: POS_COLORS.TE, color: "#fff" }}>TE</span>
         </div>
         <p className="text-sm text-gray-600">
-          Medals gehen an den Manager, der am Saisonende (Week 18 ausgenommen) den punktbesten QB, RB, WR oder TE besitzt.
+          Medals gehen an den Manager, der in Week 16 den punktbesten QB, RB, WR oder TE besitzt.
         </p>
       </section>
 
