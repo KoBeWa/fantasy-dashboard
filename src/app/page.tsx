@@ -76,10 +76,36 @@ function norm(s: string | null | undefined) {
     .trim();
 }
 
+// Robust: erkennt 1.234,56  |  1,234.56  |  174.76  |  174,76
 function toNum(x: any): number {
   if (x == null) return 0;
   if (typeof x === "number") return x;
-  const s = String(x).replace(/\./g, "").replace(",", ".");
+  let s = String(x).trim();
+
+  // 1) Reine Komma-Decimalzahlen (keine Punkte):  "174,76" -> 174.76
+  if (s.includes(",") && !s.includes(".")) {
+    return Number(s.replace(/\s/g, "").replace(",", "."));
+  }
+
+  // 2) Klassisch deutsch: "1.234,56"
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
+    s = s.replace(/\./g, "").replace(",", ".");
+    return Number(s);
+  }
+
+  // 3) Klassisch US: "1,234.56"
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
+    s = s.replace(/,/g, "");
+    return Number(s);
+  }
+
+  // 4) Nur Punkt als Dezimaltrenner: "174.76"
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    return Number(s);
+  }
+
+  // Fallback: alles Nicht-Ziffern außer . und - entfernen
+  s = s.replace(/[^0-9.\-]/g, "");
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 }
