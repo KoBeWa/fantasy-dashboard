@@ -314,7 +314,8 @@ export default function RecordsPage() {
     return [...seasonPF].sort((a,b) => b.pf - a.pf).slice(0,5);
   }, [seasonPF]);
   const top5SeasonLow = useMemo(() => {
-    return [...seasonPF].sort((a,b) => a.pf - b.pf).slice(0,5);
+    const complete = seasonPF.filter((r) => r.games === 16); // genau 16 Wochen
+    return complete.sort((a, b) => a.pf - b.pf).slice(0, 5);
   }, [seasonPF]);
 
   // Biggest blowouts / combined highs / combined lows
