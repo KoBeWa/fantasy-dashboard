@@ -2,523 +2,624 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-/** ---------------------------------------------------------
- *  Datenquelle
- *  Wir laden die Week-CSV direkt aus FF-Scraping (raw.githubusercontent).
- *  Erwartetes Schema pro Zeile:
- *    Owner,Rank, ..., Total,Opponent,Opponent Total
- *  Die Datei existiert für: output/teamgamecenter/<season>/<week>.csv
- *  --------------------------------------------------------- */
+/**
+ * This page loads:
+ *  - Weekly matchups:   data/teamgamecenter/<YEAR>/<WEEK>.csv
+ *  - Season totals:     data/processed/seasons/<YEAR>/teams.json
+ *
+ * Records shown:
+ *  - Top 5 highest scoring week  (single team)
+ *  - Top 5 lowest  scoring week  (single team)
+ *  - Top 5 season high points    (PF per season + avg / game)
+ *  - Top 5 season low  points    (PF per season + avg / game)
+ *  - Top 5 biggest blowouts      (win margin)
+ *  - Top 5 highest combined      (A+B)
+ *  - Top 5 lowest  combined      (A+B)
+ *  - Highest winning streak      (across seasons)
+ *  - Highest losing  streak      (across seasons)
+ *  - High scores count           (# of weekly #1s per owner)
+ *  - Top 3 scores count          (# of weekly top-3 per owner)
+ */
 
-const SEASONS = Array.from({ length: 2025 - 2015 + 1 }, (_, i) => 2015 + i);
-const WEEKS = Array.from({ length: 16 }, (_, i) => i + 1); // 1..16 (inkl. Playoffs >14)
+// ---------- Config ----------
+const FIRST_SEASON = 2015;
+const LAST_SEASON = 2025;   // adjust if needed
+const MAX_WEEK = 16;        // Sleeper/your export uses 1..16
+const BASE_PATH =
+  (process.env.NEXT_PUBLIC_BASE_PATH && process.env.NEXT_PUBLIC_BASE_PATH !== "/")
+    ? process.env.NEXT_PUBLIC_BASE_PATH.replace(/\/+$/, "")
+    : "";
 
-type WeekRow = {
+// ---------- Helpers ----------
+function buildUrl(p: string) {
+  const clean = p.replace(/^\/+/, "");
+  return `${BASE_PATH}/${clean}`;
+}
+function toNum(x: any): number {
+  if (x == null) return 0;
+  if (typeof x === "number") return x;
+  const s = String(x).replace(/\./g, "").replace(",", ".");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+function fmt(n: number, digits = 2) {
+  return n.toFixed(digits);
+}
+
+// CSV parser (very small, good enough for your matchups)
+async function fetchCSV(path: string): Promise<string[][]> {
+  const res = await fetch(buildUrl(path), { cache: "no-store" });
+  if (!res.ok) throw new Error(`${path} ${res.status}`);
+  const text = await res.text();
+  const lines = text.trim().split(/\r?\n/);
+  const rows = lines.map((line) => {
+    // split by comma, but keep simple (your fields don't contain quoted commas except names, which are fine)
+    return line.split(",").map((c) => c.trim());
+  });
+  return rows;
+}
+
+// JSON loader
+async function fetchJSON<T>(path: string): Promise<T> {
+  const res = await fetch(buildUrl(path), { cache: "no-store" });
+  if (!res.ok) throw new Error(`${path} ${res.status}`);
+  return (await res.json()) as T;
+}
+
+// ---------- Types ----------
+type TeamsJsonRow = {
+  season?: number;
+  team?: string;
+  owner?: string;
+  manager?: string;
+  wins?: number | string;
+  losses?: number | string;
+  ties?: number | string;
+  pf?: number | string;
+  pa?: number | string;
+};
+
+type WeeklyEntry = {
   season: number;
   week: number;
   owner: string;
   total: number;
   opponent: string;
   opponentTotal: number;
+  matchupIdKey: string; // stable key to group pairs
 };
 
-type MatchKey = string; // canonical "season|week|A_vs_B" mit A<B
+type Matchup = {
+  season: number;
+  week: number;
+  aOwner: string;
+  aPts: number;
+  bOwner: string;
+  bPts: number;
+  winner: string;
+  loser: string;
+  margin: number;
+  combined: number;
+};
 
-function canonicalPair(a: string, b: string) {
-  return (a || "") <= (b || "") ? `${a}__vs__${b}` : `${b}__vs__${a}`;
-}
-
-async function fetchWeekCSV(season: number, week: number): Promise<WeekRow[] | null> {
-  const url = `https://raw.githubusercontent.com/KoBeWa/FF-Scraping/master/output/teamgamecenter/${season}/${week}.csv`;
-  const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) return null;
-  const text = await r.text();
-
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(",");
-  const idx = (name: string) =>
-    headers.findIndex((h) => h.trim().toLowerCase() === name.trim().toLowerCase());
-
-  const iOwner = idx("Owner");
-  const iTotal = idx("Total");
-  const iOpp = idx("Opponent");
-  const iOppTotal = headers.findIndex(
-    (h) => h.replace(/\s+/g, "").toLowerCase() === "opponenttotal"
-  );
-
-  const out: WeekRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const raw = parseCSVLine(lines[i], headers.length);
-    if (!raw) continue;
-    const owner = (raw[iOwner] ?? "").trim();
-    const opp = (raw[iOpp] ?? "").trim();
-    const total = toNum(raw[iTotal]);
-    const oppTotal = toNum(raw[iOppTotal]);
-    if (!owner) continue;
-    out.push({ season, week, owner, total, opponent: opp, opponentTotal: oppTotal });
-  }
-  return out;
-}
-
-// CSV-Zeile robust splitten (unterstützt komma-getrennt, evtl. Anführungszeichen)
-function parseCSVLine(line: string, expectedCols: number): string[] | null {
-  const cells: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === "," && !inQuotes) {
-      cells.push(cur);
-      cur = "";
-    } else {
-      cur += ch;
-    }
-  }
-  cells.push(cur);
-
-  // ggf. auf expectedCols auffüllen
-  while (cells.length < expectedCols) cells.push("");
-  return cells;
-}
-
-function toNum(x: any): number {
-  if (x == null) return 0;
-  const s = String(x).replace(/\./g, "").replace(",", ".");
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/* ===================== UI Helpers ===================== */
-function Card({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <article className="border rounded-xl p-4 bg-white/70 shadow-sm">
-      <h3 className="font-semibold mb-2">{title}</h3>
-      {children}
-    </article>
-  );
-}
-
-function StatLine({
-  primary,
-  secondary,
-  right,
-}: {
-  primary: string;
-  secondary?: string;
-  right?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between border-t first:border-t-0 py-1.5 text-sm">
-      <div className="min-w-0">
-        <div className="font-medium truncate">{primary}</div>
-        {secondary && <div className="text-xs text-gray-600">{secondary}</div>}
-      </div>
-      {right && <div className="ml-3 font-semibold tabular-nums">{right}</div>}
-    </div>
-  );
-}
-
-/* ===================== Seite ===================== */
+// ---------- Main component ----------
 export default function RecordsPage() {
-  const [rows, setRows] = useState<WeekRow[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [weekly, setWeekly] = useState<WeeklyEntry[]>([]);
+  const [seasonTeams, setSeasonTeams] = useState<TeamsJsonRow[]>([]);
 
-  // Laden: alle Seasons/Weeks (nur vorhandene)
+  // Load all seasons weekly CSVs + all seasons teams.json
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
-      const all: WeekRow[] = [];
-      for (const season of SEASONS) {
-        for (const week of WEEKS) {
-          try {
-            const w = await fetchWeekCSV(season, week);
-            if (w && w.length) all.push(...w);
-          } catch {
-            // ignorieren
+      try {
+        const seasons = Array.from({ length: LAST_SEASON - FIRST_SEASON + 1 }, (_, i) => FIRST_SEASON + i);
+
+        // --- load weekly CSVs ---
+        const weeklyAll: WeeklyEntry[] = [];
+        for (const y of seasons) {
+          for (let w = 1; w <= MAX_WEEK; w++) {
+            try {
+              const rows = await fetchCSV(`data/teamgamecenter/${y}/${w}.csv`);
+              if (!rows || rows.length < 2) continue;
+              const header = rows[0];
+              // find columns robustly
+              const findCol = (name: string) => {
+                const target = name.replace(/\s+/g, "").toLowerCase();
+                let idx = header.findIndex((h) => h.replace(/\s+/g, "").toLowerCase() === target);
+                if (idx === -1 && name === "Opponent Total") {
+                  // some files might use 'OpponentTotal'
+                  idx = header.findIndex((h) => h.replace(/\s+/g, "").toLowerCase() === "opponenttotal");
+                }
+                return idx;
+              };
+              const cOwner = findCol("Owner");
+              const cTotal = findCol("Total");
+              const cOpp   = findCol("Opponent");
+              const cOppT  = findCol("Opponent Total");
+
+              if ([cOwner, cTotal, cOpp, cOppT].some((x) => x < 0)) continue;
+
+              // parse rows
+              // We’ll create one entry per row, then pair them by (owner, opponent) unique key
+              for (let i = 1; i < rows.length; i++) {
+                const r = rows[i];
+                const owner = r[cOwner] ?? "";
+                const opp = r[cOpp] ?? "";
+                const tot = toNum(r[cTotal]);
+                const oppTot = toNum(r[cOppT]);
+
+                if (!owner || !opp) continue;
+
+                const key = [owner, opp].sort().join("::");
+                weeklyAll.push({
+                  season: y,
+                  week: w,
+                  owner,
+                  total: tot,
+                  opponent: opp,
+                  opponentTotal: oppTot,
+                  matchupIdKey: key,
+                });
+              }
+            } catch {
+              // file missing → skip silently
+            }
           }
         }
+
+        // --- load teams.json for all seasons ---
+        const teamsAll: TeamsJsonRow[] = [];
+        for (const y of seasons) {
+          try {
+            const arr = await fetchJSON<TeamsJsonRow[]>(`data/processed/seasons/${y}/teams.json`);
+            teamsAll.push(...arr.map((t) => ({ ...t, season: y })));
+          } catch {
+            // missing: skip
+          }
+        }
+
+        if (!cancelled) {
+          setWeekly(weeklyAll);
+          setSeasonTeams(teamsAll);
+          setLoading(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setWeekly([]);
+          setSeasonTeams([]);
+          setLoading(false);
+        }
       }
-      if (!cancelled) setRows(all);
     })();
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const data = rows ?? [];
+  // Build unique matchups from weekly rows
+  const matchups: Matchup[] = useMemo(() => {
+    const out: Matchup[] = [];
+    // group by season/week/key
+    const map = new Map<string, WeeklyEntry[]>();
+    for (const r of weekly) {
+      const k = `${r.season}-${r.week}-${r.matchupIdKey}`;
+      const arr = map.get(k) ?? [];
+      arr.push(r);
+      map.set(k, arr);
+    }
+    for (const [k, arr] of map.entries()) {
+      if (arr.length === 2) {
+        const A = arr[0], B = arr[1];
+        const winner = A.total >= B.total ? A.owner : B.owner;
+        const loser  = A.total >= B.total ? B.owner : A.owner;
+        const margin = Math.abs(A.total - B.total);
+        const combined = A.total + B.total;
+        out.push({
+          season: A.season,
+          week: A.week,
+          aOwner: A.owner, aPts: A.total,
+          bOwner: B.owner, bPts: B.total,
+          winner, loser, margin, combined
+        });
+      } else if (arr.length === 1) {
+        const A = arr[0];
+        out.push({
+          season: A.season,
+          week: A.week,
+          aOwner: A.owner, aPts: A.total,
+          bOwner: A.opponent, bPts: A.opponentTotal,
+          winner: A.total >= A.opponentTotal ? A.owner : A.opponent,
+          loser:  A.total >= A.opponentTotal ? A.opponent : A.owner,
+          margin: Math.abs(A.total - A.opponentTotal),
+          combined: A.total + A.opponentTotal
+        });
+      }
+    }
+    // sort chronologically
+    out.sort((a,b) => a.season - b.season || a.week - b.week);
+    return out;
+  }, [weekly]);
 
-  // Für Matchup-basierte Rekorde: nur 1 Zeile pro Matchup
-  const matchups = useMemo(() => {
-    const seen = new Set<MatchKey>();
-    const out: WeekRow[] = [];
-    for (const r of data) {
-      const key: MatchKey = `${r.season}|${r.week}|${canonicalPair(r.owner, r.opponent)}`;
-      if (seen.has(key)) continue;
-      // wir behalten die Zeile des Owners; Werte für beide Teams sind vorhanden
-      out.push(r);
-      seen.add(key);
+  // Highest/Lowest scoring week (single team)
+  const allSingleScores = useMemo(() => {
+    const arr: { season:number; week:number; owner:string; points:number }[] = [];
+    for (const m of matchups) {
+      arr.push({ season: m.season, week: m.week, owner: m.aOwner, points: m.aPts });
+      arr.push({ season: m.season, week: m.week, owner: m.bOwner, points: m.bPts });
+    }
+    return arr;
+  }, [matchups]);
+
+  const top5HighWeek = useMemo(() => {
+    return [...allSingleScores].sort((a,b) => b.points - a.points).slice(0,5);
+  }, [allSingleScores]);
+  const top5LowWeek = useMemo(() => {
+    return [...allSingleScores].sort((a,b) => a.points - b.points).slice(0,5);
+  }, [allSingleScores]);
+
+  // Season PF high/low + average per week
+  type SeasonPF = { season:number; owner:string; team?:string; games:number; pf:number; avg:number };
+  const seasonPF: SeasonPF[] = useMemo(() => {
+    const out: SeasonPF[] = [];
+    for (const t of seasonTeams) {
+      const owner = (t.team ?? t.owner ?? t.manager ?? "") as string;
+      const wins = toNum(t.wins);
+      const losses = toNum(t.losses);
+      const ties = toNum((t as any).ties);
+      const games = Math.max(1, wins + losses + ties);
+      const pf = toNum(t.pf);
+      out.push({
+        season: toNum(t.season),
+        owner,
+        team: t.team,
+        games,
+        pf,
+        avg: pf / games
+      });
     }
     return out;
-  }, [data]);
+  }, [seasonTeams]);
 
-  // Helper: sortierbarer Labeltext
-  const labelWeek = (r: WeekRow) => `S${r.season} • W${r.week}`;
-  const labelPair = (r: WeekRow) => `${r.owner} vs. ${r.opponent}`;
+  const top5SeasonHigh = useMemo(() => {
+    return [...seasonPF].sort((a,b) => b.pf - a.pf).slice(0,5);
+  }, [seasonPF]);
+  const top5SeasonLow = useMemo(() => {
+    return [...seasonPF].sort((a,b) => a.pf - b.pf).slice(0,5);
+  }, [seasonPF]);
 
-  /* ---------------------- 1) Highest / Lowest scoring week ---------------------- */
-  const highestWeek = useMemo(() => {
-    if (!data.length) return null;
-    return [...data].sort((a, b) => b.total - a.total)[0];
-  }, [data]);
-
-  const lowestWeek = useMemo(() => {
-    if (!data.length) return null;
-    return [...data].sort((a, b) => a.total - b.total)[0];
-  }, [data]);
-
-  /* ---------------------- 2) Season high points (PF je Season) ---------------------- */
-  // Wir aggregieren PF je Season aus WeekRows (sum = Season PF je Owner) und picken den Max je Season.
-  const seasonHighPF = useMemo(() => {
-    const bySeasonOwner = new Map<string, number>(); // `${season}|${owner}` → PF
-    for (const r of data) {
-      const k = `${r.season}|${r.owner}`;
-      bySeasonOwner.set(k, (bySeasonOwner.get(k) ?? 0) + r.total);
-    }
-    const best: { season: number; owner: string; pf: number }[] = [];
-    for (const season of SEASONS) {
-      let winner: { owner: string; pf: number } | null = null;
-      for (const [k, v] of bySeasonOwner.entries()) {
-        const [s, owner] = k.split("|");
-        if (Number(s) !== season) continue;
-        if (!winner || v > winner.pf) winner = { owner, pf: v };
-      }
-      if (winner) best.push({ season, owner: winner.owner, pf: round2(winner.pf) });
-    }
-    return best.filter(Boolean);
-  }, [data]);
-
-  /* ---------------------- 3) Biggest blowouts ---------------------- */
-  const blowouts = useMemo(() => {
-    return [...matchups]
-      .map((r) => ({
-        ...r,
-        diff: Math.abs(r.total - r.opponentTotal),
-      }))
-      .filter((r) => Number.isFinite(r.diff))
-      .sort((a, b) => b.diff - a.diff)
-      .slice(0, 10);
+  // Biggest blowouts / combined highs / combined lows
+  const top5Blowouts = useMemo(() => {
+    return [...matchups].sort((a,b) => b.margin - a.margin).slice(0,5);
+  }, [matchups]);
+  const top5CombinedHigh = useMemo(() => {
+    return [...matchups].sort((a,b) => b.combined - a.combined).slice(0,5);
+  }, [matchups]);
+  const top5CombinedLow = useMemo(() => {
+    return [...matchups].sort((a,b) => a.combined - b.combined).slice(0,5);
   }, [matchups]);
 
-  /* ---------------------- 4) Highest & Lowest combined score ---------------------- */
-  const combinedTop = useMemo(() => {
-    if (!matchups.length) return null;
-    return [...matchups]
-      .map((r) => ({ ...r, sum: r.total + r.opponentTotal }))
-      .filter((r) => Number.isFinite(r.sum))
-      .sort((a, b) => b.sum - a.sum)[0];
-  }, [matchups]);
-
-  const combinedLow = useMemo(() => {
-    if (!matchups.length) return null;
-    return [...matchups]
-      .map((r) => ({ ...r, sum: r.total + r.opponentTotal }))
-      .filter((r) => Number.isFinite(r.sum))
-      .sort((a, b) => a.sum - b.sum)[0];
-  }, [matchups]);
-
-  /* ---------------------- 5) Streaks (über Saisons hinweg) ---------------------- */
-  // Wir sortieren chronologisch und zählen pro Owner Win/Lose-Sequenzen.
-  const { bestWinStreak, bestLoseStreak } = useMemo(() => {
-    const bySeasonWeek = [...matchups].sort(
-      (a, b) => a.season - b.season || a.week - b.week
-    );
-
-    const curWin = new Map<string, number>();
-    const curLose = new Map<string, number>();
-    const maxWin = new Map<string, number>();
-    const maxLose = new Map<string, number>();
-
-    const bump = (m: Map<string, number>, key: string) =>
-      m.set(key, (m.get(key) ?? 0) + 1);
-
-    const reset = (m: Map<string, number>, key: string) => m.set(key, 0);
-
-    for (const g of bySeasonWeek) {
-      // Gewinner/Verlierer bestimmen
-      let a = g.owner,
-        b = g.opponent,
-        aPts = g.total,
-        bPts = g.opponentTotal;
-      if (!a || !b || !Number.isFinite(aPts) || !Number.isFinite(bPts)) continue;
-      if (aPts === bPts) {
-        // Gleichstand: beide Streaks unterbrechen
-        reset(curWin, a);
-        reset(curWin, b);
-        reset(curLose, a);
-        reset(curLose, b);
-        continue;
-      }
-      const winner = aPts > bPts ? a : b;
-      const loser = aPts > bPts ? b : a;
-
-      // Winner
-      bump(curWin, winner);
-      maxWin.set(winner, Math.max(maxWin.get(winner) ?? 0, curWin.get(winner) ?? 0));
-      reset(curLose, winner);
-
-      // Loser
-      bump(curLose, loser);
-      maxLose.set(loser, Math.max(maxLose.get(loser) ?? 0, curLose.get(loser) ?? 0));
-      reset(curWin, loser);
+  // Streaks (across seasons)
+  type Result = { owner:string; win:boolean; season:number; week:number };
+  const streaks = useMemo(() => {
+    const res: Result[] = [];
+    for (const m of matchups) {
+      res.push({ owner: m.winner, win: true,  season: m.season, week: m.week });
+      res.push({ owner: m.loser,  win: false, season: m.season, week: m.week });
     }
-
-    const bestWin =
-      Array.from(maxWin.entries()).sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
-    const bestLose =
-      Array.from(maxLose.entries()).sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
-
-    return {
-      bestWinStreak: { owner: bestWin[0], streak: bestWin[1] },
-      bestLoseStreak: { owner: bestLose[0], streak: bestLose[1] },
-    };
-  }, [matchups]);
-
-  /* ---------------------- 6) High scores / Top3 counts pro Woche ---------------------- */
-  const hiScoresCount = useMemo(() => {
-    const map = new Map<string, number>();
-    const key = (o: string) => o || "";
-    // Für jede (season, week): höchster Team-Score finden, alle Ties zählen
-    const bySW = groupBy(data, (r) => `${r.season}|${r.week}`);
-    for (const arr of bySW.values()) {
-      const max = Math.max(...arr.map((x) => x.total));
-      for (const r of arr) if (r.total === max) map.set(key(r.owner), (map.get(key(r.owner)) ?? 0) + 1);
+    // group per owner chronologically
+    const byOwner = new Map<string, Result[]>();
+    for (const r of res) {
+      const arr = byOwner.get(r.owner) ?? [];
+      arr.push(r);
+      byOwner.set(r.owner, arr);
     }
-    return Array.from(map.entries())
-      .map(([owner, count]) => ({ owner, count }))
-      .sort((a, b) => b.count - a.count || a.owner.localeCompare(b.owner))
-      .slice(0, 20);
-  }, [data]);
-
-  const top3Count = useMemo(() => {
-    const map = new Map<string, number>();
-    const key = (o: string) => o || "";
-    const bySW = groupBy(data, (r) => `${r.season}|${r.week}`);
-    for (const arr of bySW.values()) {
-      // Top-3 Ränge mit Ties: wir nehmen die 3 höchsten distinct Totals
-      const distinctTotals = Array.from(new Set(arr.map((x) => x.total))).sort(
-        (a, b) => b - a
-      );
-      const cutoff = distinctTotals.slice(0, 3);
+    for (const arr of byOwner.values()) {
+      arr.sort((a,b) => a.season - b.season || a.week - b.week);
+    }
+    // compute max win/lose streak per owner
+    let bestWin = { owner:"", len:0 };
+    let bestLose= { owner:"", len:0 };
+    for (const [owner, arr] of byOwner.entries()) {
+      let curW=0, maxW=0, curL=0, maxL=0;
       for (const r of arr) {
-        if (cutoff.includes(r.total)) map.set(key(r.owner), (map.get(key(r.owner)) ?? 0) + 1);
+        if (r.win) { curW++; maxW = Math.max(maxW, curW); curL = 0; }
+        else       { curL++; maxL = Math.max(maxL, curL); curW = 0; }
+      }
+      if (maxW > bestWin.len) bestWin = { owner, len: maxW };
+      if (maxL > bestLose.len) bestLose= { owner, len: maxL };
+    }
+    return { bestWin, bestLose };
+  }, [matchups]);
+
+  // Weekly #1 (high score) count and weekly top-3 count
+  const weeklyAwards = useMemo(() => {
+    // build per season/week list of scores
+    const swMap = new Map<string, { owner:string; points:number }[]>();
+    for (const s of allSingleScores) {
+      const key = `${s.season}-${s.week}`;
+      const arr = swMap.get(key) ?? [];
+      arr.push({ owner: s.owner, points: s.points });
+      swMap.set(key, arr);
+    }
+    const highCount = new Map<string, number>();
+    const top3Count = new Map<string, number>();
+
+    for (const [k, arr] of swMap.entries()) {
+      arr.sort((a,b) => b.points - a.points);
+      const tops = arr;
+      if (tops.length > 0) {
+        const maxPoints = tops[0].points;
+        // all owners tied for #1 count
+        for (const e of tops) {
+          if (e.points === maxPoints) {
+            highCount.set(e.owner, (highCount.get(e.owner) ?? 0) + 1);
+          } else break;
+        }
+      }
+      // top-3 (including ties around 3rd cutoff)
+      const top3 = tops.slice(0, Math.min(3, tops.length));
+      let cutoff = top3.length ? top3[top3.length - 1].points : -Infinity;
+      for (const e of tops) {
+        if (e.points >= cutoff) {
+          top3Count.set(e.owner, (top3Count.get(e.owner) ?? 0) + 1);
+        } else {
+          break;
+        }
       }
     }
-    return Array.from(map.entries())
-      .map(([owner, count]) => ({ owner, count }))
-      .sort((a, b) => b.count - a.count || a.owner.localeCompare(b.owner))
-      .slice(0, 20);
-  }, [data]);
 
-  /* ---------------------- Render ---------------------- */
+    // build sorted arrays
+    const highArr = Array.from(highCount.entries()).map(([owner, count]) => ({ owner, count }));
+    highArr.sort((a,b) => b.count - a.count || a.owner.localeCompare(b.owner));
+
+    const top3Arr = Array.from(top3Count.entries()).map(([owner, count]) => ({ owner, count }));
+    top3Arr.sort((a,b) => b.count - a.count || a.owner.localeCompare(b.owner));
+
+    return { highArr, top3Arr };
+  }, [allSingleScores]);
+
+  // ---------- UI helpers ----------
+  function Table<T>({ rows, header, render }: {
+    rows: T[];
+    header: React.ReactNode;
+    render: (row: T, idx: number) => React.ReactNode;
+  }) {
+    return (
+      <table className="w-full text-sm">
+        <thead className="text-left">
+          {header}
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t">{render(r, i)}</tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+
+  if (loading) {
+    return (
+      <main className="p-6">
+        <header className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold">Records</h1>
+          <Link href="/" className="ml-auto text-sm underline">← Dashboard</Link>
+        </header>
+        <p className="mt-4 text-sm text-gray-600">Lade Daten…</p>
+      </main>
+    );
+  }
+
   return (
-    <main className="p-6 space-y-6">
+    <main className="p-6 space-y-8">
       <header className="flex items-center gap-3">
         <h1 className="text-2xl font-semibold">Records</h1>
-        <Link
-          href="/"
-          className="ml-auto text-sm underline decoration-dotted hover:decoration-solid"
-        >
-          ← zurück zum Dashboard
-        </Link>
+        <Link href="/" className="ml-auto text-sm underline decoration-dotted hover:decoration-solid">← Dashboard</Link>
       </header>
 
-      {!rows && <p className="text-sm text-gray-600">Lade Week-Daten…</p>}
-
-      {/* Top-Kacheln */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-        <Card title="Highest scoring week">
-          {highestWeek ? (
-            <StatLine
-              primary={`${highestWeek.owner}`}
-              secondary={`${labelWeek(highestWeek)} • ${labelPair(highestWeek)}`}
-              right={`${highestWeek.total.toFixed(2)}`}
-            />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-
-        <Card title="Lowest scoring week">
-          {lowestWeek ? (
-            <StatLine
-              primary={`${lowestWeek.owner}`}
-              secondary={`${labelWeek(lowestWeek)} • ${labelPair(lowestWeek)}`}
-              right={`${lowestWeek.total.toFixed(2)}`}
-            />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-
-        <Card title="Highest combined score">
-          {combinedTop ? (
-            <StatLine
-              primary={`${labelPair(combinedTop)}`}
-              secondary={`${labelWeek(combinedTop)}`}
-              right={`${(combinedTop.total + combinedTop.opponentTotal).toFixed(2)}`}
-            />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-
-        <Card title="Lowest combined score">
-          {combinedLow ? (
-            <StatLine
-              primary={`${labelPair(combinedLow)}`}
-              secondary={`${labelWeek(combinedLow)}`}
-              right={`${(combinedLow.total + combinedLow.opponentTotal).toFixed(2)}`}
-            />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-
-        <Card title="Highest winning streak (all time)">
-          {bestWinStreak?.owner ? (
-            <StatLine
-              primary={bestWinStreak.owner}
-              right={`${bestWinStreak.streak} wins`}
-            />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-
-        <Card title="Highest losing streak (all time)">
-          {bestLoseStreak?.owner ? (
-            <StatLine
-              primary={bestLoseStreak.owner}
-              right={`${bestLoseStreak.streak} losses`}
-            />
-          ) : (
-            <Empty />
-          )}
-        </Card>
+      {/* High/Low single weeks */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Highest Scoring Week</h2>
+          <Table
+            rows={top5HighWeek}
+            header={
+              <tr>
+                <th>Owner</th><th>Pts</th><th>Season</th><th>Week</th>
+              </tr>
+            }
+            render={(r) => (
+              <>
+                <td>{r.owner}</td>
+                <td className="text-right font-medium">{fmt(r.points)}</td>
+                <td>{r.season}</td>
+                <td>{r.week}</td>
+              </>
+            )}
+          />
+        </article>
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Lowest Scoring Week</h2>
+          <Table
+            rows={top5LowWeek}
+            header={
+              <tr>
+                <th>Owner</th><th>Pts</th><th>Season</th><th>Week</th>
+              </tr>
+            }
+            render={(r) => (
+              <>
+                <td>{r.owner}</td>
+                <td className="text-right font-medium">{fmt(r.points)}</td>
+                <td>{r.season}</td>
+                <td>{r.week}</td>
+              </>
+            )}
+          />
+        </article>
       </section>
 
-      {/* Biggest blowouts */}
-      <section className="grid grid-cols-1 gap-4">
-        <Card title="Biggest blowouts (Top 10)">
-          {blowouts.length ? (
+      {/* Season PF high/low */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Season High Points (PF)</h2>
+          <Table
+            rows={top5SeasonHigh}
+            header={
+              <tr>
+                <th>Season</th><th>Owner</th><th>PF</th><th>Avg / wk</th><th>Games</th>
+              </tr>
+            }
+            render={(r) => (
+              <>
+                <td>{r.season}</td>
+                <td>{r.owner}</td>
+                <td className="text-right font-medium">{fmt(r.pf)}</td>
+                <td className="text-right">{fmt(r.avg)}</td>
+                <td className="text-center">{r.games}</td>
+              </>
+            )}
+          />
+        </article>
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Season Low Points (PF)</h2>
+          <Table
+            rows={top5SeasonLow}
+            header={
+              <tr>
+                <th>Season</th><th>Owner</th><th>PF</th><th>Avg / wk</th><th>Games</th>
+              </tr>
+            }
+            render={(r) => (
+              <>
+                <td>{r.season}</td>
+                <td>{r.owner}</td>
+                <td className="text-right font-medium">{fmt(r.pf)}</td>
+                <td className="text-right">{fmt(r.avg)}</td>
+                <td className="text-center">{r.games}</td>
+              </>
+            )}
+          />
+        </article>
+      </section>
+
+      {/* Matchup based */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Biggest Blowouts</h2>
+          <Table
+            rows={top5Blowouts}
+            header={
+              <tr>
+                <th>Season</th><th>Week</th><th>Winner</th><th>Loser</th><th>Margin</th>
+              </tr>
+            }
+            render={(m) => (
+              <>
+                <td>{m.season}</td>
+                <td>{m.week}</td>
+                <td>{m.winner}</td>
+                <td>{m.loser}</td>
+                <td className="text-right font-medium">{fmt(m.margin)}</td>
+              </>
+            )}
+          />
+        </article>
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Highest Combined</h2>
+          <Table
+            rows={top5CombinedHigh}
+            header={
+              <tr>
+                <th>Season</th><th>Week</th><th>A</th><th>B</th><th>Combined</th>
+              </tr>
+            }
+            render={(m) => (
+              <>
+                <td>{m.season}</td>
+                <td>{m.week}</td>
+                <td>{m.aOwner} {fmt(m.aPts)}</td>
+                <td>{m.bOwner} {fmt(m.bPts)}</td>
+                <td className="text-right font-medium">{fmt(m.combined)}</td>
+              </>
+            )}
+          />
+        </article>
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Top 5 – Lowest Combined</h2>
+          <Table
+            rows={top5CombinedLow}
+            header={
+              <tr>
+                <th>Season</th><th>Week</th><th>A</th><th>B</th><th>Combined</th>
+              </tr>
+            }
+            render={(m) => (
+              <>
+                <td>{m.season}</td>
+                <td>{m.week}</td>
+                <td>{m.aOwner} {fmt(m.aPts)}</td>
+                <td>{m.bOwner} {fmt(m.bPts)}</td>
+                <td className="text-right font-medium">{fmt(m.combined)}</td>
+              </>
+            )}
+          />
+        </article>
+      </section>
+
+      {/* Streaks & weekly awards */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Highest Winning / Losing Streak</h2>
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="border-t">
+                <td>Winning</td>
+                <td className="text-right font-medium">{streaks.bestWin.owner}</td>
+                <td className="text-right">{streaks.bestWin.len}</td>
+              </tr>
+              <tr className="border-t">
+                <td>Losing</td>
+                <td className="text-right font-medium">{streaks.bestLose.owner}</td>
+                <td className="text-right">{streaks.bestLose.len}</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+        <article className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Weekly Awards</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              {blowouts.map((r, i) => (
-                <StatLine
-                  key={`${r.season}-${r.week}-${i}`}
-                  primary={`${labelPair(r)}`}
-                  secondary={`${labelWeek(r)}`}
-                  right={`${Math.abs(r.total - r.opponentTotal).toFixed(2)}`}
-                />
-              ))}
+              <h3 className="font-semibold mb-1">High Scores (#1 per week)</h3>
+              <Table
+                rows={weeklyAwards.highArr.slice(0,10)}
+                header={<tr><th>Owner</th><th>#</th></tr>}
+                render={(r) => (<><td>{r.owner}</td><td className="text-right">{r.count}</td></>)}
+              />
             </div>
-          ) : (
-            <Empty />
-          )}
-        </Card>
-      </section>
-
-      {/* Season High PF je Season (Liste) */}
-      <section className="grid grid-cols-1 gap-4">
-        <Card title="Season high points (PF per Season)">
-          {seasonHighPF.length ? (
             <div>
-              {seasonHighPF.map((r) => (
-                <StatLine
-                  key={r.season}
-                  primary={`${r.season} • ${r.owner}`}
-                  right={`${r.pf.toFixed(2)}`}
-                />
-              ))}
+              <h3 className="font-semibold mb-1">Top 3 per week</h3>
+              <Table
+                rows={weeklyAwards.top3Arr.slice(0,10)}
+                header={<tr><th>Owner</th><th>#</th></tr>}
+                render={(r) => (<><td>{r.owner}</td><td className="text-right">{r.count}</td></>)}
+              />
             </div>
-          ) : (
-            <Empty />
-          )}
-        </Card>
+          </div>
+        </article>
       </section>
 
-      {/* High scores / Top 3 counts */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card title="High scores (Anzahl Wochen-Siege)">
-          {hiScoresCount.length ? (
-            <TableCounts rows={hiScoresCount} />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-        <Card title="Top 3 scores (Anzahl Top-3 je Woche)">
-          {top3Count.length ? (
-            <TableCounts rows={top3Count} />
-          ) : (
-            <Empty />
-          )}
-        </Card>
-      </section>
+      {/* Data missing hint */}
+      {(weekly.length === 0 || seasonTeams.length === 0) && (
+        <p className="text-xs text-gray-600">
+          Hinweis: Stelle sicher, dass die Build-Pipeline die Dateien nach <code>public/data</code> kopiert:
+          <code> data/teamgamecenter/&lt;YEAR&gt;/&lt;WEEK&gt;.csv</code> und
+          <code> data/processed/seasons/&lt;YEAR&gt;/teams.json</code>.
+        </p>
+      )}
     </main>
   );
-}
-
-/* ===================== kleine Sub-Components ===================== */
-function Empty() {
-  return <p className="text-sm text-gray-600">—</p>;
-}
-
-function TableCounts({ rows }: { rows: { owner: string; count: number }[] }) {
-  return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr>
-          <th className="text-left">Owner</th>
-          <th className="text-right">Count</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.owner} className="border-t">
-            <td>{r.owner}</td>
-            <td className="text-right font-semibold">{r.count}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-/* ===================== Utils ===================== */
-function groupBy<T>(arr: T[], keyFn: (v: T) => string) {
-  const m = new Map<string, T[]>();
-  for (const v of arr) {
-    const k = keyFn(v);
-    const a = m.get(k);
-    if (a) a.push(v);
-    else m.set(k, [v]);
-  }
-  return m;
-}
-
-function round2(x: number) {
-  return Math.round(x * 100) / 100;
 }
