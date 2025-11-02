@@ -25,6 +25,7 @@ export default function Nav() {
     <nav className="flex items-center gap-2">
       <Item href="/" label="Dashboard" />
       <Item href="/seasons" label="Seasons" />
+      <Item href="/records" label="Records" />
       <Item href="/medals" label="Medals" /> {/* 🏅 neu hinzugefügt */}
     </nav>
   );
