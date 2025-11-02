@@ -5,13 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
-# GitHub Pages braucht diese Permissions
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Keine parallelen Deploys
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -23,6 +21,9 @@ jobs:
       - name: Checkout site (fantasy-dashboard)
         uses: actions/checkout@v4
 
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Checkout data repo (FF-Scraping)
         uses: actions/checkout@v4
         with:
@@ -30,34 +31,25 @@ jobs:
           path: ff-data
           fetch-depth: 1
 
-      # -------- Daten ins Frontend kopieren --------
-      - name: Copy processed season JSONs (for Seasons/Dashboard)
+      # ---- Daten ins Frontend kopieren ----
+      - name: Copy processed season JSONs (Seasons/Dashboard)
         run: |
           mkdir -p public/data/processed
           rsync -a ff-data/public/data/processed/ public/data/processed/ || true
-          echo "Processed seasons copied:"
-          find public/data/processed -maxdepth 3 -type f | head -n 20 || true
 
-      - name: Copy weekly gamecenter CSVs (for Records)
+      - name: Copy weekly gamecenter CSVs (Records)
         run: |
           mkdir -p public/data/teamgamecenter
           rsync -a ff-data/output/teamgamecenter/ public/data/teamgamecenter/ || true
-          echo "Weekly CSVs example:"
-          find public/data/teamgamecenter -maxdepth 2 -type f | head -n 20 || true
 
-      - name: Copy league-wide files (elo, aggregated standings, players)
+      - name: Copy league-wide files (elo, aggregated, players)
         run: |
           mkdir -p public/data/league
-          # Elo (falls vorhanden)
           cp ff-data/public/data/league/elo_history.json public/data/league/elo_history.json || true
-          # Aggregated standings
           cp ff-data/output/history-standings/aggregated_standings.tsv public/data/league/aggregated_standings.tsv || true
-          # Medals/players
           cp ff-data/output/players.tsv public/data/league/players.tsv || true
-          echo "League files:"
-          ls -l public/data/league || true
 
-      # -------- Build --------
+      # ---- Build ----
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -69,12 +61,11 @@ jobs:
 
       - name: Build (Next.js static export)
         env:
-          # wichtig für GitHub Pages unter /fantasy-dashboard
           NEXT_PUBLIC_BASE_PATH: /fantasy-dashboard
           NEXT_TELEMETRY_DISABLED: "1"
         run: npm run build
 
-      # -------- Upload Artifact für Pages --------
+      # ---- Upload Artifact ----
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -83,11 +74,10 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
-
-    steps:
-      - id: deployment
         uses: actions/deploy-pages@v4
