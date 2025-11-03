@@ -39,11 +39,9 @@ function num(x: any, fallback = 0) {
   const n = Number(String(x ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : fallback;
 }
-
 function up(x: any) {
   return String(x ?? "").toUpperCase();
 }
-
 function normName(s: string) {
   return s
     .toLowerCase()
@@ -52,19 +50,46 @@ function normName(s: string) {
     .replace(/\s+/g, "")
     .trim();
 }
-
 function pickLabel(round: number, pir: number) {
   return `${round}.${String(pir).padStart(2, "0")}`;
 }
 
-// ---------- Component ----------
+// Draft-Positionsränge je Position zählen (RB1, WR12, …)
+function computeDraftPosRanks(rows: DraftRow[]): Map<number, number> {
+  const sortedIdx = rows
+    .map((r, i) => ({ i, ov: r.Overall }))
+    .sort((a, b) => a.ov - b.ov)
+    .map((x) => x.i);
+  const counters: Record<string, number> = {};
+  const res = new Map<number, number>();
+  for (const idx of sortedIdx) {
+    const pos = rows[idx].Pos;
+    counters[pos] = (counters[pos] ?? 0) + 1;
+    res.set(idx, counters[pos]); // z. B. WR → 1,2,3…
+  }
+  return res;
+}
+
+// Heatmap-Farbe pro Runde anhand Score
+function scoreHeat(score: number, min: number, max: number) {
+  if (!Number.isFinite(score) || max <= min) return "";
+  const t = Math.max(0, Math.min(1, (score - min) / (max - min)));
+  // 0..1 → rot..grün (tailwind shades)
+  if (t < 0.2) return "bg-red-100";
+  if (t < 0.4) return "bg-orange-100";
+  if (t < 0.6) return "bg-yellow-100";
+  if (t < 0.8) return "bg-lime-100";
+  return "bg-green-100";
+}
+
 export default function DraftHistoryPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [year, setYear] = useState<number | null>(null);
   const [draft, setDraft] = useState<DraftRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [compareMode, setCompareMode] = useState<boolean>(true);
 
-  // 1) Scores laden (alle Jahre in einer Datei)
+  // 1) Scores laden
   useEffect(() => {
     fetch("/fantasy-dashboard/data/league/draft_scores.tsv")
       .then((r) => r.text())
@@ -78,23 +103,18 @@ export default function DraftHistoryPage() {
           Final_Pos_Rank: num(r.Final_Pos_Rank, undefined),
           Score: num(r.Score),
         })) as ScoreRow[];
-
         setScores(rows);
-
-        // default: jüngstes Jahr mit Scores (2025 ist bei dir ausgeschlossen)
         const years = Array.from(new Set(rows.map((x) => x.Year))).sort((a, b) => a - b);
         setYear(years.at(-1) ?? null);
       })
-      .catch((e) => setError("Konnte draft_scores.tsv nicht laden"));
+      .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
   }, []);
 
-  // 2) Draft-Datei für das gewählte Jahr laden
+  // 2) Draft pro Jahr laden (aus public/data/drafts/YYYY-draft.tsv)
   useEffect(() => {
     if (!year) return;
-
     setDraft(null);
     setError(null);
-
     fetch(`/fantasy-dashboard/data/drafts/${year}-draft.tsv`)
       .then((r) => {
         if (!r.ok) throw new Error("not found");
@@ -110,8 +130,6 @@ export default function DraftHistoryPage() {
           Pos: up(r.Pos ?? r.Position),
           NFLTeam: r.NFLTeam ? String(r.NFLTeam) : undefined,
         })) as DraftRow[];
-
-        // sortiere nach Overall für stabile Reihenfolge
         rows.sort((a, b) => a.Overall - b.Overall);
         setDraft(rows);
       })
@@ -122,35 +140,37 @@ export default function DraftHistoryPage() {
       );
   }, [year]);
 
-  // 3) Join Draft <-> Scores (Year + (Owner≈Manager) + Player≈Player + Pos; Fallback Pick)
+  // 3) Join Draft <-> Scores (Year + Owner≈Manager + Player≈Player + Pos; Fallback Pick)
   const joined = useMemo(() => {
     if (!draft || !scores || !year) return [];
+    const yearScores = scores.filter((s) => s.Year === year);
 
-    const scoreRows = scores.filter((s) => s.Year === year);
-
-    // Indexe für schnelles Matching
     const byComposite = new Map<string, ScoreRow[]>();
-    for (const s of scoreRows) {
+    const byPick = new Map<number, ScoreRow[]>();
+
+    for (const s of yearScores) {
       const key = `${normName(s.Owner)}__${normName(s.Player)}__${s.Pos}`;
       const arr = byComposite.get(key) ?? [];
       arr.push(s);
       byComposite.set(key, arr);
-    }
-    const byPick = new Map<number, ScoreRow[]>();
-    for (const s of scoreRows) {
-      const arr = byPick.get(s.Pick) ?? [];
-      arr.push(s);
-      byPick.set(s.Pick, arr);
+
+      const arr2 = byPick.get(s.Pick) ?? [];
+      arr2.push(s);
+      byPick.set(s.Pick, arr2);
     }
 
-    return draft.map((d) => {
+    // Draft-Positionsränge (RB1, WR7, …)
+    const draftPosRanks = computeDraftPosRanks(draft);
+
+    // Round → [scores] für Heatmap
+    const roundStats = new Map<number, { min: number; max: number }>();
+
+    const rows = draft.map((d, idx) => {
       const key = `${normName(d.ManagerName)}__${normName(d.Player)}__${d.Pos}`;
       let match = (byComposite.get(key) ?? [])[0];
 
       if (!match) {
-        // Fallback: per Overall Pick
         const arr = byPick.get(d.Overall) ?? [];
-        // wenn mehrere, versuche Positionsgleichheit
         match = arr.find((x) => x.Pos === d.Pos) ?? arr[0];
       }
 
@@ -159,15 +179,46 @@ export default function DraftHistoryPage() {
           ? `${match.Pos}#${match.Final_Pos_Rank}`
           : "-";
 
+      const score = match ? match.Score : NaN;
+
+      // Heatmap-Buckets sammeln
+      if (Number.isFinite(score)) {
+        const rs = roundStats.get(d.Round) ?? { min: score, max: score };
+        rs.min = Math.min(rs.min, score);
+        rs.max = Math.max(rs.max, score);
+        roundStats.set(d.Round, rs);
+      }
+
+      const draftPos = draftPosRanks.get(idx);
+      const finalPos = match?.Final_Pos_Rank ?? undefined;
+      const deltaPos =
+        Number.isFinite(draftPos as any) && Number.isFinite(finalPos as any)
+          ? Number(draftPos) - Number(finalPos)
+          : undefined;
+
       return {
+        Round: d.Round,
         Pick: pickLabel(d.Round, d.PickInRound),
         Manager: d.ManagerName,
         Player: d.Player,
         Pos: d.Pos,
         EndOfSeasonRank: finalRank,
-        Score: match ? match.Score.toFixed(2) : "-",
+        Score: Number.isFinite(score) ? Number(score) : undefined,
+        DraftPos: draftPos,
+        FinalPos: finalPos,
+        DeltaPos: deltaPos,
       };
     });
+
+    // Score-Heatmap-Klasse je Zeile bestimmen
+    const withHeat = rows.map((r) => {
+      if (!Number.isFinite(r.Score as any)) return { ...r, heat: "" };
+      const stat = roundStats.get(r.Round);
+      const cls = stat ? scoreHeat(Number(r.Score), stat.min, stat.max) : "";
+      return { ...r, heat: cls };
+    });
+
+    return withHeat;
   }, [draft, scores, year]);
 
   const years = useMemo(() => {
@@ -177,7 +228,17 @@ export default function DraftHistoryPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Draft History</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">Draft History</h1>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={compareMode}
+            onChange={(e) => setCompareMode(e.target.checked)}
+          />
+          Compare Mode (Δ & Heatmap)
+        </label>
+      </div>
 
       {/* Year Picker */}
       <div className="mb-4 flex items-center gap-2">
@@ -204,29 +265,72 @@ export default function DraftHistoryPage() {
       {!draft ? (
         <div className="p-4">Lade Draft {year}…</div>
       ) : (
-        <table className="w-full border border-gray-300 text-sm">
-          <thead>
-            <tr className="bg-gray-100">
-              {["Pick", "Manager", "Player", "Pos", "EndOfSeasonRank", "Score"].map((h) => (
-                <th key={h} className="border px-2 py-1 text-center">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {joined.map((r, i) => (
-              <tr key={i} className="odd:bg-white even:bg-gray-50">
-                <td className="border px-2 py-1 text-center">{r.Pick}</td>
-                <td className="border px-2 py-1 text-center">{r.Manager}</td>
-                <td className="border px-2 py-1 text-center">{r.Player}</td>
-                <td className="border px-2 py-1 text-center">{r.Pos}</td>
-                <td className="border px-2 py-1 text-center">{r.EndOfSeasonRank}</td>
-                <td className="border px-2 py-1 text-center">{r.Score}</td>
+        <>
+          <table className="w-full border border-gray-300 text-sm">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border px-2 py-1 text-center">Pick</th>
+                <th className="border px-2 py-1 text-center">Manager</th>
+                <th className="border px-2 py-1 text-center">Player</th>
+                <th className="border px-2 py-1 text-center">Pos</th>
+                {compareMode && (
+                  <>
+                    <th className="border px-2 py-1 text-center">DraftPos</th>
+                    <th className="border px-2 py-1 text-center">FinalPos</th>
+                    <th className="border px-2 py-1 text-center">ΔPos</th>
+                  </>
+                )}
+                <th className="border px-2 py-1 text-center">EndOfSeasonRank</th>
+                <th className="border px-2 py-1 text-center">Score</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {joined.map((r, i) => (
+                <tr key={i} className={`odd:bg-white even:bg-gray-50`}>
+                  <td className="border px-2 py-1 text-center">{r.Pick}</td>
+                  <td className="border px-2 py-1 text-center">{r.Manager}</td>
+                  <td className="border px-2 py-1 text-center">{r.Player}</td>
+                  <td className="border px-2 py-1 text-center">{r.Pos}</td>
+                  {compareMode && (
+                    <>
+                      <td className="border px-2 py-1 text-center">
+                        {Number.isFinite(r.DraftPos as any) ? `${r.Pos}${r.DraftPos}` : "-"}
+                      </td>
+                      <td className="border px-2 py-1 text-center">
+                        {Number.isFinite(r.FinalPos as any) ? `${r.Pos}${r.FinalPos}` : "-"}
+                      </td>
+                      <td
+                        className={`border px-2 py-1 text-center ${
+                          Number(r.DeltaPos) > 0
+                            ? "text-green-700"
+                            : Number(r.DeltaPos) < 0
+                            ? "text-red-700"
+                            : ""
+                        }`}
+                      >
+                        {Number.isFinite(r.DeltaPos as any) ? `${r.DeltaPos! > 0 ? "+" : ""}${r.DeltaPos}` : "-"}
+                      </td>
+                    </>
+                  )}
+                  <td className="border px-2 py-1 text-center">{r.EndOfSeasonRank}</td>
+                  <td className={`border px-2 py-1 text-center font-medium ${compareMode ? r.heat : ""}`}>
+                    {Number.isFinite(r.Score as any) ? Number(r.Score).toFixed(2) : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {compareMode && (
+            <div className="mt-3 text-xs text-gray-600">
+              <div className="inline-flex items-center gap-2">
+                <span className="px-2 py-1 bg-red-100 border rounded">schwacher Pick (Runden-vergleich)</span>
+                <span className="px-2 py-1 bg-green-100 border rounded">starker Pick (Runden-vergleich)</span>
+                <span className="ml-3">ΔPos = DraftPos − FinalPos (positiv = Steal)</span>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
