@@ -36,6 +36,12 @@ jobs:
         run: |
           mkdir -p public/data/processed
           rsync -a ff-data/public/data/processed/ public/data/processed/ || true
+          
+      - name: Evaluate Drafts
+        run: |
+          chmod +x scripts/evaluate_drafts.py
+          python scripts/evaluate_drafts.py
+          ls -l public/data/league | grep draft_scores
 
       - name: Copy weekly gamecenter CSVs (Records)
         run: |
