@@ -3,71 +3,74 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { loadTSV } from "@/lib/data";
 
-type DraftScore = {
-  Year: string;
+// ----- Typen -----
+type DraftRow = {
+  Year: number | string;
   Owner: string;
   Player: string;
   Pos: string;
-  Pick: string;
-  EndRank: string;
-  Score: string;
+  Pick: number | string;
+  Draft_Pos_Rank?: number | string;
+  Final_Pos_Rank?: number | string;
+  Delta_Pos_Rank?: number | string;
+  Points: number | string;
+  Score: number | string;
 };
 
-function Table<T>({ rows, header, render }: {
-  rows: T[];
-  header: React.ReactNode;
-  render: (row: T, i: number) => React.ReactNode;
-}) {
-  return (
-    <table className="w-full text-sm text-center border-collapse">
-      <thead className="bg-gray-50 font-semibold border-b">{header}</thead>
-      <tbody>
-        {rows.map((r, i) => (
-          <tr key={i} className="border-t hover:bg-gray-50">
-            {render(r, i)}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
+// ... nachdem du `drafts` aus TSV geladen hast:
 
-export default function DraftsPage() {
-  const [drafts, setDrafts] = useState<DraftScore[]>([]);
+// 1) Parsing/Normalisierung
+const parsed: DraftRow[] = (drafts as any[]).map((d) => ({
+  ...d,
+  Year: Number(d.Year),
+  Pick: Number(d.Pick),
+  Points: Number(d.Points ?? 0),
+  Score: Number(d.Score ?? 0),
+  Pos: String(d.Pos ?? "").toUpperCase(),
+  Player: String(d.Player ?? ""),
+  Owner: String(d.Owner ?? "")
+}));
 
-  useEffect(() => {
-    loadTSV("data/league/draft_scores.tsv").then((rows) => {
-      setDrafts(rows as DraftScore[]);
-    });
-  }, []);
+// 2) Jahre ohne Endrankings ausschließen (z. B. 2025)
+const EXCLUDE_YEARS = new Set<number>([2025]);
+const filtered = parsed.filter((d) => !EXCLUDE_YEARS.has(Number(d.Year)));
 
-  const byOwner = useMemo(() => {
-    const map = new Map<string, DraftScore[]>();
-    for (const d of drafts) {
-      const key = `${d.Owner}-${d.Year}`;
-      map.set(key, [...(map.get(key) || []), d]);
-    }
-    const agg = Array.from(map.entries()).map(([key, vals]) => {
-      const [owner, year] = key.split("-");
-      const avg = vals.length ? vals.reduce((s, v) => s + Number(v.Score), 0) / vals.length : 0;
-      return { owner, year, avg: Number(avg.toFixed(2)), count: vals.length };
-    });
-    return agg;
-  }, [drafts]);
+// 3) Aggregation: Durchschnitt pro (Owner, Year)
+const byOwnerYear = (() => {
+  const map = new Map<string, { owner: string; year: number; avg: number; n: number }>();
+  for (const d of filtered) {
+    const key = `${d.Owner}__${d.Year}`;
+    const prev = map.get(key) ?? { owner: d.Owner, year: Number(d.Year), avg: 0, n: 0 };
+    const score = Number(d.Score) || 0;
+    const n = prev.n + 1;
+    const avg = (prev.avg * prev.n + score) / n;
+    map.set(key, { owner: d.Owner, year: Number(d.Year), avg, n });
+  }
+  return Array.from(map.values());
+})();
 
-  const topDrafts = [...byOwner].sort((a,b)=>b.avg - a.avg).slice(0,5);
-  const worstDrafts = [...byOwner].sort((a,b)=>a.avg - b.avg).slice(0,5);
+// 4) Best/Worst Overall Drafts (Owner-Year, nach Durchschnitt)
+const bestDrafts = [...byOwnerYear].sort((a, b) => b.avg - a.avg).slice(0, 5);
+const worstDrafts = [...byOwnerYear].sort((a, b) => a.avg - b.avg).slice(0, 5);
 
-  const bestPicks = [...drafts].sort((a,b)=>Number(b.Score)-Number(a.Score)).slice(0,5);
-  // Beispiel (React/Next.js, auf deiner drafts page)
-  const worstPicks = allPicks
-    .filter(p => p.Pos !== "K" && p.Pos !== "DST") // keine Kicker/Defenses
-    .filter(p => p.Points > 0)                     // keine 0-Punkte-Spieler
-    .sort((a, b) => a.Score - b.Score)
-    .slice(0, 5);
+// 5) Best Picks (Top Scores)
+const bestPicks = [...filtered].sort((a, b) => Number(b.Score) - Number(a.Score)).slice(0, 5);
 
+// 6) Worst Picks (keine K/DST, keine 0-Punkte; Ausnahme Andrew Luck 2019 zulassen)
+const worstPicks = [...filtered]
+  .filter((p) => p.Pos !== "K" && p.Pos !== "DST")
+  .filter((p) => {
+    const year = Number(p.Year);
+    const pts = Number(p.Points) || 0;
+    const isAndrewLuck2019 = p.Player.toLowerCase() === "andrew luck" && year === 2019;
+    return isAndrewLuck2019 || pts > 0; // 0-Punkte-Spieler raus, außer AL2019
+  })
+  .sort((a, b) => Number(a.Score) - Number(b.Score))
+  .slice(0, 5);
 
-  const firstPicks = [...drafts].filter(d=>Number(d.Pick)===1);
+// 7) First overall picks
+const firstOverall = filtered.filter((d) => Number(d.Pick) === 1);
+
 
   return (
     <main className="p-6 space-y-8">
