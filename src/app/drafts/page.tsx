@@ -59,7 +59,13 @@ export default function DraftsPage() {
   const worstDrafts = [...byOwner].sort((a,b)=>a.avg - b.avg).slice(0,5);
 
   const bestPicks = [...drafts].sort((a,b)=>Number(b.Score)-Number(a.Score)).slice(0,5);
-  const worstPicks = [...drafts].sort((a,b)=>Number(a.Score)-Number(b.Score)).slice(0,5);
+  // Beispiel (React/Next.js, auf deiner drafts page)
+  const worstPicks = allPicks
+    .filter(p => p.Pos !== "K" && p.Pos !== "DST") // keine Kicker/Defenses
+    .filter(p => p.Points > 0)                     // keine 0-Punkte-Spieler
+    .sort((a, b) => a.Score - b.Score)
+    .slice(0, 5);
+
 
   const firstPicks = [...drafts].filter(d=>Number(d.Pick)===1);
 
