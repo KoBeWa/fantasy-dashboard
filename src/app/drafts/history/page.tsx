@@ -9,9 +9,10 @@ type ScoreRow = {
   Player: string;
   Pos: string;
   Pick: number;
-  Final_Pos_Rank?: number;
+  Final_Pos_Rank: number | null; // <- vorher optional/number, jetzt number | null
   Score: number;
 };
+
 
 type DraftRow = {
   Round: number;
@@ -110,35 +111,33 @@ export default function DraftHistoryPage() {
       .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
   }, []);
 
-  // 2) Draft pro Jahr laden (aus public/data/drafts/YYYY-draft.tsv)
+  // 1) Scores laden (alle Jahre in einer Datei)
   useEffect(() => {
-    if (!year) return;
-    setDraft(null);
-    setError(null);
-    fetch(`/fantasy-dashboard/data/drafts/${year}-draft.tsv`)
-      .then((r) => {
-        if (!r.ok) throw new Error("not found");
-        return r.text();
-      })
+    fetch("/fantasy-dashboard/data/league/draft_scores.tsv")
+      .then((r) => r.text())
       .then((txt) => {
-        const rows = parseTSV<Record<string, any>>(txt).map((r) => ({
-          Round: num(r.Round),
-          Overall: num(r.Overall ?? r.OverallPick ?? r.Pick),
-          PickInRound: num(r.PickInRound),
-          ManagerName: String(r.ManagerName ?? r.Owner ?? ""),
-          Player: String(r.Player ?? ""),
-          Pos: up(r.Pos ?? r.Position),
-          NFLTeam: r.NFLTeam ? String(r.NFLTeam) : undefined,
-        })) as DraftRow[];
-        rows.sort((a, b) => a.Overall - b.Overall);
-        setDraft(rows);
+        const rows = parseTSV<Record<string, any>>(txt).map((r) => {
+          const rawFpr = (r.Final_Pos_Rank ?? "").toString().trim();
+          const fpr = rawFpr === "" ? null : Number(rawFpr.replace(",", "."));
+          return {
+            Year: num(r.Year),
+            Owner: String(r.Owner ?? ""),
+            Player: String(r.Player ?? ""),
+            Pos: up(r.Pos),
+            Pick: num(r.Pick),
+            Final_Pos_Rank: Number.isFinite(fpr as any) ? (fpr as number) : null,
+            Score: num(r.Score),
+          } as ScoreRow;
+        });
+  
+        setScores(rows);
+  
+        const years = Array.from(new Set(rows.map((x) => x.Year))).sort((a, b) => a - b);
+        setYear(years.at(-1) ?? null);
       })
-      .catch(() =>
-        setError(
-          `Draft-Datei für ${year} nicht gefunden. Stelle sicher, dass sie unter public/data/drafts/${year}-draft.tsv liegt.`
-        )
-      );
-  }, [year]);
+      .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
+  }, []);
+
 
   // 3) Join Draft <-> Scores (Year + Owner≈Manager + Player≈Player + Pos; Fallback Pick)
   const joined = useMemo(() => {
@@ -175,7 +174,7 @@ export default function DraftHistoryPage() {
       }
 
       const finalRank =
-        match && Number.isFinite(match.Final_Pos_Rank as any)
+        match && match.Final_Pos_Rank !== null
           ? `${match.Pos}#${match.Final_Pos_Rank}`
           : "-";
 
@@ -190,11 +189,12 @@ export default function DraftHistoryPage() {
       }
 
       const draftPos = draftPosRanks.get(idx);
-      const finalPos = match?.Final_Pos_Rank ?? undefined;
+      const finalPos = match?.Final_Pos_Rank ?? null;
       const deltaPos =
-        Number.isFinite(draftPos as any) && Number.isFinite(finalPos as any)
+        Number.isFinite(draftPos as any) && finalPos !== null
           ? Number(draftPos) - Number(finalPos)
           : undefined;
+
 
       return {
         Round: d.Round,
@@ -297,7 +297,7 @@ export default function DraftHistoryPage() {
                         {Number.isFinite(r.DraftPos as any) ? `${r.Pos}${r.DraftPos}` : "-"}
                       </td>
                       <td className="border px-2 py-1 text-center">
-                        {Number.isFinite(r.FinalPos as any) ? `${r.Pos}${r.FinalPos}` : "-"}
+                        {finalPos !== null ? `${r.Pos}${finalPos}` : "-"}
                       </td>
                       <td
                         className={`border px-2 py-1 text-center ${
