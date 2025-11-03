@@ -9,7 +9,6 @@ type ScoreRow = {
   Player: string;
   Pos: string;
   Pick: number;
-  Final_Pos_Rank: number | null;
   Score: number;
 };
 
@@ -23,17 +22,24 @@ type DraftRow = {
   NFLTeam?: string;
 };
 
+type RankingRow = {
+  Year: number;
+  Position: string;
+  Rank: number;
+  Player: string;
+};
+
 type JoinedRow = {
   Round: number;
   Pick: string;
   Manager: string;
   Player: string;
   Pos: string;
-  EndOfSeasonRank: string;
-  Score?: number;
-  DraftPos?: number;
-  FinalPos: number | null;
-  DeltaPos?: number;
+  EndOfSeasonRank: string; // z. B. "WR#1" (aus rankings csv)
+  Score?: number;          // aus draft_scores.tsv
+  DraftPos?: number;       // berechneter Draft-Positionsrang (WR7, RB3, …)
+  FinalPos: number | null; // nur Zahl aus rankings csv (z. B. 1)
+  DeltaPos?: number;       // DraftPos - FinalPos
   heat?: string;
 };
 
@@ -49,15 +55,21 @@ function parseTSV<T extends Record<string, any>>(text: string): T[] {
   });
 }
 
+function parseCSV<T extends Record<string, any>>(text: string): T[] {
+  const lines = text.trim().split(/\r?\n/);
+  const headers = lines.shift()!.split(",").map((h) => h.trim());
+  return lines.map((line) => {
+    // einfache CSV (keine eingebetteten Kommas in Quotes in deiner Datei)
+    const cols = line.split(",").map((v) => v.trim());
+    const obj: any = {};
+    headers.forEach((h, i) => (obj[h] = cols[i]));
+    return obj as T;
+  });
+}
+
 function num(x: any, fallback = 0) {
   const n = Number(String(x ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : fallback;
-}
-function numOrNull(x: any): number | null {
-  const s = String(x ?? "").trim();
-  if (!s) return null;
-  const n = Number(s.replace(",", "."));
-  return Number.isFinite(n) ? n : null;
 }
 function up(x: any) {
   return String(x ?? "").toUpperCase();
@@ -103,6 +115,7 @@ function scoreHeat(score: number, min: number, max: number) {
 
 export default function DraftHistoryPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [rankings, setRankings] = useState<RankingRow[]>([]);
   const [year, setYear] = useState<number | null>(null);
   const [draft, setDraft] = useState<DraftRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -113,18 +126,14 @@ export default function DraftHistoryPage() {
     fetch("/fantasy-dashboard/data/league/draft_scores.tsv")
       .then((r) => r.text())
       .then((txt) => {
-        const rows = parseTSV<Record<string, any>>(txt).map((r) => {
-          const fpr = numOrNull(r.Final_Pos_Rank);
-          return {
-            Year: num(r.Year),
-            Owner: String(r.Owner ?? ""),
-            Player: String(r.Player ?? ""),
-            Pos: up(r.Pos),
-            Pick: num(r.Pick),
-            Final_Pos_Rank: fpr,
-            Score: num(r.Score),
-          } as ScoreRow;
-        });
+        const rows = parseTSV<Record<string, any>>(txt).map((r) => ({
+          Year: num(r.Year),
+          Owner: String(r.Owner ?? ""),
+          Player: String(r.Player ?? ""),
+          Pos: up(r.Pos),
+          Pick: num(r.Pick),
+          Score: num(r.Score),
+        })) as ScoreRow[];
         setScores(rows);
         const years = Array.from(new Set(rows.map((x) => x.Year))).sort((a, b) => a - b);
         setYear(years.at(-1) ?? null);
@@ -132,7 +141,28 @@ export default function DraftHistoryPage() {
       .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
   }, []);
 
-  // 2) Draft pro Jahr laden (aus public/data/drafts/YYYY-draft.tsv)
+  // 2) Rankings laden (für EndOfSeasonRank)
+  useEffect(() => {
+    fetch("/fantasy-dashboard/data/league/season_pos_rankings.csv")
+      .then((r) => r.text())
+      .then((txt) => {
+        // CSV-Header: Year,Position,Rank,Player,Team,Points
+        const rows = parseCSV<Record<string, any>>(txt).map((r) => ({
+          Year: num(r.Year),
+          Position: up(r.Position),
+          Rank: num(r.Rank),
+          Player: String(r.Player ?? ""),
+        })) as RankingRow[];
+        setRankings(rows);
+      })
+      .catch(() =>
+        setError(
+          "Konnte season_pos_rankings.csv nicht laden (public/data/league/season_pos_rankings.csv)."
+        )
+      );
+  }, []);
+
+  // 3) Draft-Datei pro Jahr laden (aus public/data/drafts/YYYY-draft.tsv)
   useEffect(() => {
     if (!year) return;
     setDraft(null);
@@ -162,7 +192,17 @@ export default function DraftHistoryPage() {
       );
   }, [year]);
 
-  // 3) Join Draft <-> Scores + Heatmap je Runde
+  // Index für Rankings: (Year, Pos, normName(Player)) -> Rank
+  const rankIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rankings) {
+      const key = `${r.Year}__${r.Position}__${normName(r.Player)}`;
+      if (!m.has(key)) m.set(key, r.Rank);
+    }
+    return m;
+  }, [rankings]);
+
+  // 4) Join Draft <-> Score + EndRank aus rankings.csv + Heatmap
   const joined = useMemo<JoinedRow[]>(() => {
     if (!draft || !scores || !year) return [];
 
@@ -185,25 +225,26 @@ export default function DraftHistoryPage() {
     const roundStats = new Map<number, { min: number; max: number }>();
 
     const rows: JoinedRow[] = draft.map((d, idx) => {
-      const key = `${normName(d.ManagerName)}__${normName(d.Player)}__${d.Pos}`;
-      let match = (byComposite.get(key) ?? [])[0];
+      // Score-Match wie zuvor
+      const compositeKey = `${normName(d.ManagerName)}__${normName(d.Player)}__${d.Pos}`;
+      let match = (byComposite.get(compositeKey) ?? [])[0];
       if (!match) {
         const arr = byPick.get(d.Overall) ?? [];
         match = arr.find((x) => x.Pos === d.Pos) ?? arr[0];
       }
 
-      const finalPos: number | null =
-        match && match.Final_Pos_Rank !== null ? Number(match.Final_Pos_Rank) : null;
-
-      const finalRank = finalPos !== null ? `${match!.Pos}#${finalPos}` : "-";
       const scoreNum = match ? match.Score : NaN;
-
       if (Number.isFinite(scoreNum)) {
         const rs = roundStats.get(d.Round) ?? { min: scoreNum, max: scoreNum };
         rs.min = Math.min(rs.min, scoreNum);
         rs.max = Math.max(rs.max, scoreNum);
         roundStats.set(d.Round, rs);
       }
+
+      // EndOfSeasonRank direkt aus rankings.csv:
+      const rKey = `${year}__${d.Pos}__${normName(d.Player)}`;
+      const finalPos = rankIndex.get(rKey) ?? null;
+      const endRankStr = finalPos !== null ? `${d.Pos}#${finalPos}` : "-";
 
       const draftPos = draftPosRanks.get(idx);
       const deltaPos =
@@ -217,7 +258,7 @@ export default function DraftHistoryPage() {
         Manager: d.ManagerName,
         Player: d.Player,
         Pos: d.Pos,
-        EndOfSeasonRank: finalRank,
+        EndOfSeasonRank: endRankStr,
         Score: Number.isFinite(scoreNum) ? Number(scoreNum) : undefined,
         DraftPos: draftPos,
         FinalPos: finalPos,
@@ -234,7 +275,7 @@ export default function DraftHistoryPage() {
     });
 
     return withHeat;
-  }, [draft, scores, year]);
+  }, [draft, scores, year, rankIndex]);
 
   const years = useMemo(() => {
     const ys = Array.from(new Set(scores.map((x) => x.Year))).sort((a, b) => a - b);
