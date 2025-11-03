@@ -78,18 +78,30 @@ export default function DraftsPage() {
     .sort((a, b) => Number(b.Score) - Number(a.Score))
     .slice(0, 5);
 
-  // Worst Picks (keine K/DST, keine 0-Punkte, Ausnahme Andrew Luck 2019)
+  // Worst Picks (Top 20 ihrer Position gedraftet, keine K/DST, keine 0-Punkte; Ausnahme Andrew Luck 2019)
   const worstPicks = [...filtered]
-    .filter((p) => p.Pos !== "K" && p.Pos !== "DST")
     .filter((p) => {
+      const pos = p.Pos.toUpperCase();
+      if (pos === "K" || pos === "DST") return false;        // K/DST raus
+  
       const year = Number(p.Year);
       const pts = Number(p.Points) || 0;
       const isAndrewLuck2019 =
         p.Player.toLowerCase().includes("andrew luck") && year === 2019;
-      return isAndrewLuck2019 || pts > 0;
+  
+      // 0-Punkte raus (außer Andrew Luck 2019)
+      if (!isAndrewLuck2019 && pts <= 0) return false;
+  
+      // Nur Picks, die innerhalb Top 20 der Positions-Ränge gedraftet wurden
+      const draftPosRank = Number(p.Draft_Pos_Rank ?? 999);
+      if (!Number.isFinite(draftPosRank) || draftPosRank > 20) return false;
+  
+      return true;
     })
+    // schlechteste Scores zuerst
     .sort((a, b) => Number(a.Score) - Number(b.Score))
     .slice(0, 5);
+
 
   // Alle First Overall Picks
   const firstOverall = filtered.filter((d) => Number(d.Pick) === 1);
