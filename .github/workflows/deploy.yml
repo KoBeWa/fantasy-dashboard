@@ -37,11 +37,21 @@ jobs:
           mkdir -p public/data/processed
           rsync -a ff-data/public/data/processed/ public/data/processed/ || true
           
-      - name: Evaluate Drafts
+      - name: Evaluate Drafts (in ff-data)
         run: |
           cd ff-data
+          echo ">>> Input Draft Files:"
+          ls -l output/history-drafts | head -n 5
+          echo ">>> Rankings preview:"
+          head -n 5 output/season_pos_rankings.csv
+      
           python3 scripts/evaluate_drafts.py
-          cp public/data/league/draft_scores.tsv ../public/data/league/draft_scores.tsv || true
+      
+          echo ">>> Result Preview:"
+          head -n 10 public/data/league/draft_scores.tsv || true
+      
+          cp public/data/league/draft_scores.tsv ../public/data/league/draft_scores.tsv
+
 
       - name: Copy weekly gamecenter CSVs (Records)
         run: |
