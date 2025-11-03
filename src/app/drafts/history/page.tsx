@@ -35,7 +35,7 @@ type JoinedRow = {
   Manager: string;
   Player: string;
   Pos: string;
-  EndOfSeasonRank: string; // z. B. "WR#1" (aus rankings csv)
+  //EndOfSeasonRank: string; // z. B. "WR#1" (aus rankings csv)
   Score?: number;          // aus draft_scores.tsv
   DraftPos?: number;       // berechneter Draft-Positionsrang (WR7, RB3, …)
   FinalPos: number | null; // nur Zahl aus rankings csv (z. B. 1)
@@ -258,7 +258,7 @@ export default function DraftHistoryPage() {
         Manager: d.ManagerName,
         Player: d.Player,
         Pos: d.Pos,
-        EndOfSeasonRank: endRankStr,
+        //EndOfSeasonRank: endRankStr,
         Score: Number.isFinite(scoreNum) ? Number(scoreNum) : undefined,
         DraftPos: draftPos,
         FinalPos: finalPos,
