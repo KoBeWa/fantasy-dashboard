@@ -26,6 +26,7 @@ export default function Nav() {
       <Item href="/" label="Dashboard" />
       <Item href="/seasons" label="Seasons" />
       <Item href="/records" label="Records" />
+      <Item href="/drafts" label="Drafts" />
       <Item href="/medals" label="Medals" /> {/* 🏅 neu hinzugefügt */}
     </nav>
   );
