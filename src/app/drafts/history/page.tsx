@@ -336,7 +336,7 @@ export default function DraftHistoryPage() {
                     <th className="border px-2 py-1 text-center">ΔPos</th>
                   </>
                 )}
-                <th className="border px-2 py-1 text-center">EndOfSeasonRank</th>
+                //<th className="border px-2 py-1 text-center">EndOfSeasonRank</th>
                 <th className="border px-2 py-1 text-center">Score</th>
               </tr>
             </thead>
@@ -370,7 +370,7 @@ export default function DraftHistoryPage() {
                       </td>
                     </>
                   )}
-                  <td className="border px-2 py-1 text-center">{r.EndOfSeasonRank}</td>
+                  //<td className="border px-2 py-1 text-center">{r.EndOfSeasonRank}</td>
                   <td className={`border px-2 py-1 text-center font-medium ${compareMode ? r.heat : ""}`}>
                     {Number.isFinite(r.Score as any) ? Number(r.Score).toFixed(2) : "-"}
                   </td>
