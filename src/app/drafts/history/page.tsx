@@ -35,11 +35,10 @@ type JoinedRow = {
   Manager: string;
   Player: string;
   Pos: string;
-  //EndOfSeasonRank: string; // z. B. "WR#1" (aus rankings csv)
-  Score?: number;          // aus draft_scores.tsv
-  DraftPos?: number;       // berechneter Draft-Positionsrang (WR7, RB3, …)
-  FinalPos: number | null; // nur Zahl aus rankings csv (z. B. 1)
-  DeltaPos?: number;       // DraftPos - FinalPos
+  Score?: number;
+  DraftPos?: number;
+  FinalPos: number | null;
+  DeltaPos?: number;
   heat?: string;
 };
 
@@ -59,7 +58,6 @@ function parseCSV<T extends Record<string, any>>(text: string): T[] {
   const lines = text.trim().split(/\r?\n/);
   const headers = lines.shift()!.split(",").map((h) => h.trim());
   return lines.map((line) => {
-    // einfache CSV (keine eingebetteten Kommas in Quotes in deiner Datei)
     const cols = line.split(",").map((v) => v.trim());
     const obj: any = {};
     headers.forEach((h, i) => (obj[h] = cols[i]));
@@ -97,7 +95,7 @@ function computeDraftPosRanks(rows: DraftRow[]): Map<number, number> {
   for (const idx of sortedIdx) {
     const pos = rows[idx].Pos;
     counters[pos] = (counters[pos] ?? 0) + 1;
-    res.set(idx, counters[pos]); // z. B. WR → 1,2,3…
+    res.set(idx, counters[pos]);
   }
   return res;
 }
@@ -141,12 +139,11 @@ export default function DraftHistoryPage() {
       .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
   }, []);
 
-  // 2) Rankings laden (für EndOfSeasonRank)
+  // 2) Rankings laden (für EndPos)
   useEffect(() => {
     fetch("/fantasy-dashboard/data/league/season_pos_rankings.csv")
       .then((r) => r.text())
       .then((txt) => {
-        // CSV-Header: Year,Position,Rank,Player,Team,Points
         const rows = parseCSV<Record<string, any>>(txt).map((r) => ({
           Year: num(r.Year),
           Position: up(r.Position),
@@ -156,13 +153,11 @@ export default function DraftHistoryPage() {
         setRankings(rows);
       })
       .catch(() =>
-        setError(
-          "Konnte season_pos_rankings.csv nicht laden (public/data/league/season_pos_rankings.csv)."
-        )
+        setError("Konnte season_pos_rankings.csv nicht laden (public/data/league/season_pos_rankings.csv).")
       );
   }, []);
 
-  // 3) Draft-Datei pro Jahr laden (aus public/data/drafts/YYYY-draft.tsv)
+  // 3) Draft-Datei pro Jahr laden
   useEffect(() => {
     if (!year) return;
     setDraft(null);
@@ -186,13 +181,11 @@ export default function DraftHistoryPage() {
         setDraft(rows);
       })
       .catch(() =>
-        setError(
-          `Draft-Datei für ${year} nicht gefunden. Stelle sicher, dass sie unter public/data/drafts/${year}-draft.tsv liegt.`
-        )
+        setError(`Draft-Datei für ${year} nicht gefunden. Stelle sicher, dass sie unter public/data/drafts/${year}-draft.tsv liegt.`)
       );
   }, [year]);
 
-  // Index für Rankings: (Year, Pos, normName(Player)) -> Rank
+  // Rankings-Index: (Year, Pos, normName(Player)) → Rank
   const rankIndex = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of rankings) {
@@ -202,14 +195,14 @@ export default function DraftHistoryPage() {
     return m;
   }, [rankings]);
 
-  // 4) Join Draft <-> Score + EndRank aus rankings.csv + Heatmap
+  // 4) Join Draft <-> Scores + Rankings
   const joined = useMemo<JoinedRow[]>(() => {
     if (!draft || !scores || !year) return [];
 
     const yearScores = scores.filter((s) => s.Year === year);
-
     const byComposite = new Map<string, ScoreRow[]>();
     const byPick = new Map<number, ScoreRow[]>();
+
     for (const s of yearScores) {
       const key = `${normName(s.Owner)}__${normName(s.Player)}__${s.Pos}`;
       const a = byComposite.get(key) ?? [];
@@ -225,7 +218,6 @@ export default function DraftHistoryPage() {
     const roundStats = new Map<number, { min: number; max: number }>();
 
     const rows: JoinedRow[] = draft.map((d, idx) => {
-      // Score-Match wie zuvor
       const compositeKey = `${normName(d.ManagerName)}__${normName(d.Player)}__${d.Pos}`;
       let match = (byComposite.get(compositeKey) ?? [])[0];
       if (!match) {
@@ -241,10 +233,8 @@ export default function DraftHistoryPage() {
         roundStats.set(d.Round, rs);
       }
 
-      // EndOfSeasonRank direkt aus rankings.csv:
       const rKey = `${year}__${d.Pos}__${normName(d.Player)}`;
       const finalPos = rankIndex.get(rKey) ?? null;
-      const endRankStr = finalPos !== null ? `${d.Pos}#${finalPos}` : "-";
 
       const draftPos = draftPosRanks.get(idx);
       const deltaPos =
@@ -258,7 +248,6 @@ export default function DraftHistoryPage() {
         Manager: d.ManagerName,
         Player: d.Player,
         Pos: d.Pos,
-        //EndOfSeasonRank: endRankStr,
         Score: Number.isFinite(scoreNum) ? Number(scoreNum) : undefined,
         DraftPos: draftPos,
         FinalPos: finalPos,
@@ -266,7 +255,6 @@ export default function DraftHistoryPage() {
       };
     });
 
-    // Heatmap-Klasse je Zeile
     const withHeat = rows.map((r) => {
       if (!Number.isFinite(r.Score as any)) return { ...r, heat: "" };
       const stat = roundStats.get(r.Round);
@@ -336,7 +324,6 @@ export default function DraftHistoryPage() {
                     <th className="border px-2 py-1 text-center">ΔPos</th>
                   </>
                 )}
-                //<th className="border px-2 py-1 text-center">EndOfSeasonRank</th>
                 <th className="border px-2 py-1 text-center">Score</th>
               </tr>
             </thead>
@@ -370,8 +357,11 @@ export default function DraftHistoryPage() {
                       </td>
                     </>
                   )}
-                  //<td className="border px-2 py-1 text-center">{r.EndOfSeasonRank}</td>
-                  <td className={`border px-2 py-1 text-center font-medium ${compareMode ? r.heat : ""}`}>
+                  <td
+                    className={`border px-2 py-1 text-center font-medium ${
+                      compareMode ? r.heat : ""
+                    }`}
+                  >
                     {Number.isFinite(r.Score as any) ? Number(r.Score).toFixed(2) : "-"}
                   </td>
                 </tr>
