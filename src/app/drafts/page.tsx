@@ -94,7 +94,7 @@ export default function DraftsPage() {
   
       // Nur Picks, die innerhalb Top 20 der Positions-Ränge gedraftet wurden
       const draftPosRank = Number(p.Draft_Pos_Rank ?? 999);
-      if (!Number.isFinite(draftPosRank) || draftPosRank > 20) return false;
+      if (!Number.isFinite(draftPosRank) || draftPosRank > 10) return false;
   
       return true;
     })
