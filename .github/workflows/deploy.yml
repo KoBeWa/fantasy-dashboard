@@ -61,6 +61,11 @@ jobs:
           echo ">>> Copied into dashboard repo:"
           ls -l ../public/data/league | sed -n '1,50p'
           
+      - name: Copy season position rankings
+        run: |
+          mkdir -p public/data/league
+          cp ff-data/output/season_pos_rankings.csv public/data/league/season_pos_rankings.csv || true
+    
       - name: Copy history drafts (per year)
         run: |
           mkdir -p public/data/drafts
