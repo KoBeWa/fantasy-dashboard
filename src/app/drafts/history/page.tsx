@@ -9,10 +9,9 @@ type ScoreRow = {
   Player: string;
   Pos: string;
   Pick: number;
-  Final_Pos_Rank: number | null; // <- vorher optional/number, jetzt number | null
+  Final_Pos_Rank: number | null;
   Score: number;
 };
-
 
 type DraftRow = {
   Round: number;
@@ -22,6 +21,20 @@ type DraftRow = {
   Player: string;
   Pos: string;
   NFLTeam?: string;
+};
+
+type JoinedRow = {
+  Round: number;
+  Pick: string;
+  Manager: string;
+  Player: string;
+  Pos: string;
+  EndOfSeasonRank: string;
+  Score?: number;
+  DraftPos?: number;
+  FinalPos: number | null;
+  DeltaPos?: number;
+  heat?: string;
 };
 
 // ---------- Utils ----------
@@ -39,6 +52,12 @@ function parseTSV<T extends Record<string, any>>(text: string): T[] {
 function num(x: any, fallback = 0) {
   const n = Number(String(x ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : fallback;
+}
+function numOrNull(x: any): number | null {
+  const s = String(x ?? "").trim();
+  if (!s) return null;
+  const n = Number(s.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
 }
 function up(x: any) {
   return String(x ?? "").toUpperCase();
@@ -75,7 +94,6 @@ function computeDraftPosRanks(rows: DraftRow[]): Map<number, number> {
 function scoreHeat(score: number, min: number, max: number) {
   if (!Number.isFinite(score) || max <= min) return "";
   const t = Math.max(0, Math.min(1, (score - min) / (max - min)));
-  // 0..1 → rot..grün (tailwind shades)
   if (t < 0.2) return "bg-red-100";
   if (t < 0.4) return "bg-orange-100";
   if (t < 0.6) return "bg-yellow-100";
@@ -95,106 +113,103 @@ export default function DraftHistoryPage() {
     fetch("/fantasy-dashboard/data/league/draft_scores.tsv")
       .then((r) => r.text())
       .then((txt) => {
-        const rows = parseTSV<Record<string, any>>(txt).map((r) => ({
-          Year: num(r.Year),
-          Owner: String(r.Owner ?? ""),
-          Player: String(r.Player ?? ""),
-          Pos: up(r.Pos),
-          Pick: num(r.Pick),
-          Final_Pos_Rank: num(r.Final_Pos_Rank, undefined),
-          Score: num(r.Score),
-        })) as ScoreRow[];
-        setScores(rows);
-        const years = Array.from(new Set(rows.map((x) => x.Year))).sort((a, b) => a - b);
-        setYear(years.at(-1) ?? null);
-      })
-      .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
-  }, []);
-
-  // 1) Scores laden (alle Jahre in einer Datei)
-  useEffect(() => {
-    fetch("/fantasy-dashboard/data/league/draft_scores.tsv")
-      .then((r) => r.text())
-      .then((txt) => {
         const rows = parseTSV<Record<string, any>>(txt).map((r) => {
-          const rawFpr = (r.Final_Pos_Rank ?? "").toString().trim();
-          const fpr = rawFpr === "" ? null : Number(rawFpr.replace(",", "."));
+          const fpr = numOrNull(r.Final_Pos_Rank);
           return {
             Year: num(r.Year),
             Owner: String(r.Owner ?? ""),
             Player: String(r.Player ?? ""),
             Pos: up(r.Pos),
             Pick: num(r.Pick),
-            Final_Pos_Rank: Number.isFinite(fpr as any) ? (fpr as number) : null,
+            Final_Pos_Rank: fpr,
             Score: num(r.Score),
           } as ScoreRow;
         });
-  
         setScores(rows);
-  
         const years = Array.from(new Set(rows.map((x) => x.Year))).sort((a, b) => a - b);
         setYear(years.at(-1) ?? null);
       })
       .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
   }, []);
 
+  // 2) Draft pro Jahr laden (aus public/data/drafts/YYYY-draft.tsv)
+  useEffect(() => {
+    if (!year) return;
+    setDraft(null);
+    setError(null);
+    fetch(`/fantasy-dashboard/data/drafts/${year}-draft.tsv`)
+      .then((r) => {
+        if (!r.ok) throw new Error("not found");
+        return r.text();
+      })
+      .then((txt) => {
+        const rows = parseTSV<Record<string, any>>(txt).map((r) => ({
+          Round: num(r.Round),
+          Overall: num(r.Overall ?? r.OverallPick ?? r.Pick),
+          PickInRound: num(r.PickInRound),
+          ManagerName: String(r.ManagerName ?? r.Owner ?? ""),
+          Player: String(r.Player ?? ""),
+          Pos: up(r.Pos ?? r.Position),
+          NFLTeam: r.NFLTeam ? String(r.NFLTeam) : undefined,
+        })) as DraftRow[];
+        rows.sort((a, b) => a.Overall - b.Overall);
+        setDraft(rows);
+      })
+      .catch(() =>
+        setError(
+          `Draft-Datei für ${year} nicht gefunden. Stelle sicher, dass sie unter public/data/drafts/${year}-draft.tsv liegt.`
+        )
+      );
+  }, [year]);
 
-  // 3) Join Draft <-> Scores (Year + Owner≈Manager + Player≈Player + Pos; Fallback Pick)
-  const joined = useMemo(() => {
+  // 3) Join Draft <-> Scores + Heatmap je Runde
+  const joined = useMemo<JoinedRow[]>(() => {
     if (!draft || !scores || !year) return [];
+
     const yearScores = scores.filter((s) => s.Year === year);
 
     const byComposite = new Map<string, ScoreRow[]>();
     const byPick = new Map<number, ScoreRow[]>();
-
     for (const s of yearScores) {
       const key = `${normName(s.Owner)}__${normName(s.Player)}__${s.Pos}`;
-      const arr = byComposite.get(key) ?? [];
-      arr.push(s);
-      byComposite.set(key, arr);
+      const a = byComposite.get(key) ?? [];
+      a.push(s);
+      byComposite.set(key, a);
 
-      const arr2 = byPick.get(s.Pick) ?? [];
-      arr2.push(s);
-      byPick.set(s.Pick, arr2);
+      const b = byPick.get(s.Pick) ?? [];
+      b.push(s);
+      byPick.set(s.Pick, b);
     }
 
-    // Draft-Positionsränge (RB1, WR7, …)
     const draftPosRanks = computeDraftPosRanks(draft);
-
-    // Round → [scores] für Heatmap
     const roundStats = new Map<number, { min: number; max: number }>();
 
-    const rows = draft.map((d, idx) => {
+    const rows: JoinedRow[] = draft.map((d, idx) => {
       const key = `${normName(d.ManagerName)}__${normName(d.Player)}__${d.Pos}`;
       let match = (byComposite.get(key) ?? [])[0];
-
       if (!match) {
         const arr = byPick.get(d.Overall) ?? [];
         match = arr.find((x) => x.Pos === d.Pos) ?? arr[0];
       }
 
-      const finalRank =
-        match && match.Final_Pos_Rank !== null
-          ? `${match.Pos}#${match.Final_Pos_Rank}`
-          : "-";
+      const finalPos: number | null =
+        match && match.Final_Pos_Rank !== null ? Number(match.Final_Pos_Rank) : null;
 
-      const score = match ? match.Score : NaN;
+      const finalRank = finalPos !== null ? `${match!.Pos}#${finalPos}` : "-";
+      const scoreNum = match ? match.Score : NaN;
 
-      // Heatmap-Buckets sammeln
-      if (Number.isFinite(score)) {
-        const rs = roundStats.get(d.Round) ?? { min: score, max: score };
-        rs.min = Math.min(rs.min, score);
-        rs.max = Math.max(rs.max, score);
+      if (Number.isFinite(scoreNum)) {
+        const rs = roundStats.get(d.Round) ?? { min: scoreNum, max: scoreNum };
+        rs.min = Math.min(rs.min, scoreNum);
+        rs.max = Math.max(rs.max, scoreNum);
         roundStats.set(d.Round, rs);
       }
 
       const draftPos = draftPosRanks.get(idx);
-      const finalPos = match?.Final_Pos_Rank ?? null;
       const deltaPos =
         Number.isFinite(draftPos as any) && finalPos !== null
           ? Number(draftPos) - Number(finalPos)
           : undefined;
-
 
       return {
         Round: d.Round,
@@ -203,14 +218,14 @@ export default function DraftHistoryPage() {
         Player: d.Player,
         Pos: d.Pos,
         EndOfSeasonRank: finalRank,
-        Score: Number.isFinite(score) ? Number(score) : undefined,
+        Score: Number.isFinite(scoreNum) ? Number(scoreNum) : undefined,
         DraftPos: draftPos,
         FinalPos: finalPos,
         DeltaPos: deltaPos,
       };
     });
 
-    // Score-Heatmap-Klasse je Zeile bestimmen
+    // Heatmap-Klasse je Zeile
     const withHeat = rows.map((r) => {
       if (!Number.isFinite(r.Score as any)) return { ...r, heat: "" };
       const stat = roundStats.get(r.Round);
@@ -297,7 +312,7 @@ export default function DraftHistoryPage() {
                         {Number.isFinite(r.DraftPos as any) ? `${r.Pos}${r.DraftPos}` : "-"}
                       </td>
                       <td className="border px-2 py-1 text-center">
-                        {finalPos !== null ? `${r.Pos}${finalPos}` : "-"}
+                        {r.FinalPos !== null ? `${r.Pos}${r.FinalPos}` : "-"}
                       </td>
                       <td
                         className={`border px-2 py-1 text-center ${
@@ -308,7 +323,9 @@ export default function DraftHistoryPage() {
                             : ""
                         }`}
                       >
-                        {Number.isFinite(r.DeltaPos as any) ? `${r.DeltaPos! > 0 ? "+" : ""}${r.DeltaPos}` : "-"}
+                        {Number.isFinite(r.DeltaPos as any)
+                          ? `${(r.DeltaPos as number) > 0 ? "+" : ""}${r.DeltaPos}`
+                          : "-"}
                       </td>
                     </>
                   )}
@@ -324,8 +341,8 @@ export default function DraftHistoryPage() {
           {compareMode && (
             <div className="mt-3 text-xs text-gray-600">
               <div className="inline-flex items-center gap-2">
-                <span className="px-2 py-1 bg-red-100 border rounded">schwacher Pick (Runden-vergleich)</span>
-                <span className="px-2 py-1 bg-green-100 border rounded">starker Pick (Runden-vergleich)</span>
+                <span className="px-2 py-1 bg-red-100 border rounded">schwacher Pick (Runden-Vergleich)</span>
+                <span className="px-2 py-1 bg-green-100 border rounded">starker Pick (Runden-Vergleich)</span>
                 <span className="ml-3">ΔPos = DraftPos − FinalPos (positiv = Steal)</span>
               </div>
             </div>
