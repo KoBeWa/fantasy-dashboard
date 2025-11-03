@@ -84,7 +84,6 @@ function pickLabel(round: number, pir: number) {
   return `${round}.${String(pir).padStart(2, "0")}`;
 }
 
-// Draft-Positionsränge je Position zählen (RB1, WR12, …)
 function computeDraftPosRanks(rows: DraftRow[]): Map<number, number> {
   const sortedIdx = rows
     .map((r, i) => ({ i, ov: r.Overall }))
@@ -100,7 +99,6 @@ function computeDraftPosRanks(rows: DraftRow[]): Map<number, number> {
   return res;
 }
 
-// Heatmap-Farbe pro Runde anhand Score
 function scoreHeat(score: number, min: number, max: number) {
   if (!Number.isFinite(score) || max <= min) return "";
   const t = Math.max(0, Math.min(1, (score - min) / (max - min)));
@@ -111,6 +109,7 @@ function scoreHeat(score: number, min: number, max: number) {
   return "bg-green-100";
 }
 
+// ---------- Component ----------
 export default function DraftHistoryPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [rankings, setRankings] = useState<RankingRow[]>([]);
@@ -118,6 +117,8 @@ export default function DraftHistoryPage() {
   const [draft, setDraft] = useState<DraftRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [compareMode, setCompareMode] = useState<boolean>(true);
+  const [sortCol, setSortCol] = useState<string>("Pick");
+  const [sortAsc, setSortAsc] = useState<boolean>(true);
 
   // 1) Scores laden
   useEffect(() => {
@@ -139,7 +140,7 @@ export default function DraftHistoryPage() {
       .catch(() => setError("Konnte draft_scores.tsv nicht laden"));
   }, []);
 
-  // 2) Rankings laden (für EndPos)
+  // 2) Rankings laden (für FinalPos)
   useEffect(() => {
     fetch("/fantasy-dashboard/data/league/season_pos_rankings.csv")
       .then((r) => r.text())
@@ -185,7 +186,6 @@ export default function DraftHistoryPage() {
       );
   }, [year]);
 
-  // Rankings-Index: (Year, Pos, normName(Player)) → Rank
   const rankIndex = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of rankings) {
@@ -195,10 +195,8 @@ export default function DraftHistoryPage() {
     return m;
   }, [rankings]);
 
-  // 4) Join Draft <-> Scores + Rankings
   const joined = useMemo<JoinedRow[]>(() => {
     if (!draft || !scores || !year) return [];
-
     const yearScores = scores.filter((s) => s.Year === year);
     const byComposite = new Map<string, ScoreRow[]>();
     const byPick = new Map<number, ScoreRow[]>();
@@ -208,7 +206,6 @@ export default function DraftHistoryPage() {
       const a = byComposite.get(key) ?? [];
       a.push(s);
       byComposite.set(key, a);
-
       const b = byPick.get(s.Pick) ?? [];
       b.push(s);
       byPick.set(s.Pick, b);
@@ -235,7 +232,6 @@ export default function DraftHistoryPage() {
 
       const rKey = `${year}__${d.Pos}__${normName(d.Player)}`;
       const finalPos = rankIndex.get(rKey) ?? null;
-
       const draftPos = draftPosRanks.get(idx);
       const deltaPos =
         Number.isFinite(draftPos as any) && finalPos !== null
@@ -270,6 +266,30 @@ export default function DraftHistoryPage() {
     return ys;
   }, [scores]);
 
+  // ---------- SORTING ----------
+  const sortedRows = useMemo(() => {
+    const sorted = [...joined];
+    sorted.sort((a, b) => {
+      const valA: any = (a as any)[sortCol];
+      const valB: any = (b as any)[sortCol];
+      const cmp =
+        typeof valA === "number" && typeof valB === "number"
+          ? valA - valB
+          : String(valA ?? "").localeCompare(String(valB ?? ""));
+      return sortAsc ? cmp : -cmp;
+    });
+    return sorted;
+  }, [joined, sortCol, sortAsc]);
+
+  const handleSort = (col: string) => {
+    if (sortCol === col) setSortAsc(!sortAsc);
+    else {
+      setSortCol(col);
+      setSortAsc(true);
+    }
+  };
+
+  // ---------- RENDER ----------
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
@@ -284,7 +304,6 @@ export default function DraftHistoryPage() {
         </label>
       </div>
 
-      {/* Year Picker */}
       <div className="mb-4 flex items-center gap-2">
         <label className="text-sm font-medium">Season:</label>
         <select
@@ -300,11 +319,7 @@ export default function DraftHistoryPage() {
         </select>
       </div>
 
-      {error && (
-        <div className="mb-4 p-3 border border-red-300 bg-red-50 rounded text-sm">
-          {error}
-        </div>
-      )}
+      {error && <div className="mb-4 p-3 border border-red-300 bg-red-50 rounded text-sm">{error}</div>}
 
       {!draft ? (
         <div className="p-4">Lade Draft {year}…</div>
@@ -312,23 +327,35 @@ export default function DraftHistoryPage() {
         <>
           <table className="w-full border border-gray-300 text-sm">
             <thead>
-              <tr className="bg-gray-100">
-                <th className="border px-2 py-1 text-center">Pick</th>
-                <th className="border px-2 py-1 text-center">Manager</th>
-                <th className="border px-2 py-1 text-center">Player</th>
-                <th className="border px-2 py-1 text-center">Pos</th>
-                {compareMode && (
-                  <>
-                    <th className="border px-2 py-1 text-center">DraftPos</th>
-                    <th className="border px-2 py-1 text-center">FinalPos</th>
-                    <th className="border px-2 py-1 text-center">ΔPos</th>
-                  </>
-                )}
-                <th className="border px-2 py-1 text-center">Score</th>
+              <tr className="bg-gray-100 cursor-pointer select-none">
+                {[
+                  { key: "Pick", label: "Pick" },
+                  { key: "Manager", label: "Manager" },
+                  { key: "Player", label: "Player" },
+                  { key: "Pos", label: "Pos" },
+                  ...(compareMode
+                    ? [
+                        { key: "DraftPos", label: "DraftPos" },
+                        { key: "FinalPos", label: "FinalPos" },
+                        { key: "DeltaPos", label: "ΔPos" },
+                      ]
+                    : []),
+                  { key: "Score", label: "Score" },
+                ].map((col) => (
+                  <th
+                    key={col.key}
+                    className="border px-2 py-1 text-center hover:bg-gray-200"
+                    onClick={() => handleSort(col.key)}
+                  >
+                    {col.label}{" "}
+                    {sortCol === col.key ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                ))}
               </tr>
             </thead>
+
             <tbody>
-              {joined.map((r, i) => (
+              {sortedRows.map((r, i) => (
                 <tr key={i} className={`odd:bg-white even:bg-gray-50`}>
                   <td className="border px-2 py-1 text-center">{r.Pick}</td>
                   <td className="border px-2 py-1 text-center">{r.Manager}</td>
@@ -368,16 +395,6 @@ export default function DraftHistoryPage() {
               ))}
             </tbody>
           </table>
-
-          {compareMode && (
-            <div className="mt-3 text-xs text-gray-600">
-              <div className="inline-flex items-center gap-2">
-                <span className="px-2 py-1 bg-red-100 border rounded">schwacher Pick (Runden-Vergleich)</span>
-                <span className="px-2 py-1 bg-green-100 border rounded">starker Pick (Runden-Vergleich)</span>
-                <span className="ml-3">ΔPos = DraftPos − FinalPos (positiv = Steal)</span>
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>
