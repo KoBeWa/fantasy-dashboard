@@ -39,9 +39,9 @@ jobs:
           
       - name: Evaluate Drafts
         run: |
-          chmod +x scripts/evaluate_drafts.py
-          python scripts/evaluate_drafts.py
-          ls -l public/data/league | grep draft_scores
+          cd ff-data
+          python3 scripts/evaluate_drafts.py
+          cp public/data/league/draft_scores.tsv ../public/data/league/draft_scores.tsv || true
 
       - name: Copy weekly gamecenter CSVs (Records)
         run: |
