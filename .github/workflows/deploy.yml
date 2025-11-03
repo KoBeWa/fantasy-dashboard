@@ -60,6 +60,12 @@ jobs:
           cp public/data/league/draft_scores.tsv ../public/data/league/draft_scores.tsv
           echo ">>> Copied into dashboard repo:"
           ls -l ../public/data/league | sed -n '1,50p'
+          
+      - name: Copy history drafts (per year)
+        run: |
+          mkdir -p public/data/drafts
+          rsync -a ff-data/output/history-drafts/ public/data/drafts/ || true
+          ls -l public/data/drafts | sed -n '1,50p'
 
       - name: Copy weekly gamecenter CSVs (Records)
         run: |
