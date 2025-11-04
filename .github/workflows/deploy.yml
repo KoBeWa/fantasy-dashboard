@@ -71,6 +71,15 @@ jobs:
           mkdir -p public/data/drafts
           rsync -a ff-data/output/history-drafts/ public/data/drafts/ || true
           ls -l public/data/drafts | sed -n '1,50p'
+          
+      - name: Compute Waivers (in ff-data) & copy
+        run: |
+          cd ff-data
+          python3 scripts/compute_waivers.py
+          mkdir -p ../public/data/league
+          cp public/data/league/waivers.tsv ../public/data/league/waivers.tsv
+          echo "Waivers preview:"
+          head -n 10 ../public/data/league/waivers.tsv || true
 
       - name: Copy weekly gamecenter CSVs (Records)
         run: |
