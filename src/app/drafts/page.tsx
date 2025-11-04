@@ -152,7 +152,13 @@ export default function DraftsPage() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-6">Draft Analytics</h1>
-
+      <Link
+        href="/"
+        className="ml-auto text-sm underline decoration-dotted hover:decoration-solid"
+      >
+        ← zurück zum Dashboard
+      </Link>
+      
       <Table
         title="🏆 Best Overall Drafts"
         rows={bestDrafts.map((d) => ({
