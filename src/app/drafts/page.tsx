@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type DraftRow = {
   Year: number;
@@ -151,13 +152,15 @@ export default function DraftsPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Draft Analytics</h1>
-      <Link
-        href="/"
-        className="ml-auto text-sm underline decoration-dotted hover:decoration-solid"
-      >
-        ← zurück zum Dashboard
-      </Link>
+      <header className="flex items-center gap-3">
+        <h1 className="text-2xl font-bold mb-6">Draft Analytics</h1>
+        <Link
+          href="/"
+          className="ml-auto text-sm underline decoration-dotted hover:decoration-solid"
+        >
+          ← zurück zum Dashboard
+        </Link>
+      </header>
       
       <Table
         title="🏆 Best Overall Drafts"
