@@ -11,8 +11,7 @@ type WaiverRow = {
   FirstWeek: number;
   WeeksPlayed: number;
   PointsAfterPickup: number;
-  WasDrafted: "Y" | "N";
-  DraftOwner: string;
+  AvgPoints: number;
 };
 
 function parseTSV<T extends Record<string, any>>(text: string): T[] {
@@ -25,6 +24,7 @@ function parseTSV<T extends Record<string, any>>(text: string): T[] {
     return obj as T;
   });
 }
+
 const num = (x: any, fb = 0) => {
   const n = Number(String(x ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : fb;
@@ -36,6 +36,7 @@ export default function WaiversPage() {
 
   const [year, setYear] = useState<number | "ALL">("ALL");
   const [excludeKDST, setExcludeKDST] = useState<boolean>(false);
+  const [excludeQB, setExcludeQB] = useState<boolean>(false);
   const [minWeeks, setMinWeeks] = useState<number>(1);
   const [query, setQuery] = useState<string>("");
 
@@ -54,8 +55,7 @@ export default function WaiversPage() {
           FirstWeek: num(x.FirstWeek),
           WeeksPlayed: num(x.WeeksPlayed),
           PointsAfterPickup: num(x.PointsAfterPickup),
-          WasDrafted: (x.WasDrafted as any) === "Y" ? "Y" : "N",
-          DraftOwner: x.DraftOwner || "",
+          AvgPoints: num(x.AvgPoints),
         })) as WaiverRow[];
         setRows(r);
       })
@@ -70,6 +70,7 @@ export default function WaiversPage() {
     let list = [...rows];
     if (year !== "ALL") list = list.filter((r) => r.Year === year);
     if (excludeKDST) list = list.filter((r) => r.Pos !== "K" && r.Pos !== "DST");
+    if (excludeQB) list = list.filter((r) => r.Pos !== "QB");
     if (minWeeks > 1) list = list.filter((r) => r.WeeksPlayed >= minWeeks);
     const q = query.trim().toLowerCase();
     if (q) {
@@ -81,25 +82,23 @@ export default function WaiversPage() {
       );
     }
     return list;
-  }, [rows, year, excludeKDST, minWeeks, query]);
+  }, [rows, year, excludeKDST, excludeQB, minWeeks, query]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
     arr.sort((a: any, b: any) => {
-      const A = a[sortCol], B = b[sortCol];
-      const numCols = new Set(["Year", "FirstWeek", "WeeksPlayed", "PointsAfterPickup"]);
-      const isNum = numCols.has(sortCol);
+      const numCols = new Set([
+        "Year",
+        "FirstWeek",
+        "WeeksPlayed",
+        "PointsAfterPickup",
+        "AvgPoints",
+      ]);
+      const A = a[sortCol];
+      const B = b[sortCol];
       let cmp: number;
-      if (isNum) {
-        const na = Number(A ?? Number.NaN);
-        const nb = Number(B ?? Number.NaN);
-        if (!Number.isFinite(na) && !Number.isFinite(nb)) cmp = 0;
-        else if (!Number.isFinite(na)) cmp = 1;
-        else if (!Number.isFinite(nb)) cmp = -1;
-        else cmp = na - nb;
-      } else {
-        cmp = String(A ?? "").localeCompare(String(B ?? ""), undefined, { numeric: true });
-      }
+      if (numCols.has(sortCol)) cmp = Number(A) - Number(B);
+      else cmp = String(A ?? "").localeCompare(String(B ?? ""), undefined, { numeric: true });
       return sortAsc ? cmp : -cmp;
     });
     return arr;
@@ -109,37 +108,46 @@ export default function WaiversPage() {
     if (sortCol === key) setSortAsc(!sortAsc);
     else {
       setSortCol(key);
-      setSortAsc(key === "Owner" || key === "Player"); // Strings default asc
+      setSortAsc(key === "Owner" || key === "Player");
     }
   };
 
-  // Quick-Aggregate: Top N All-Time
   const topAllTime = useMemo(() => {
     return [...rows]
-      .filter((r) => (excludeKDST ? r.Pos !== "K" && r.Pos !== "DST" : true))
+      .filter((r) => {
+        if (excludeKDST && (r.Pos === "K" || r.Pos === "DST")) return false;
+        if (excludeQB && r.Pos === "QB") return false;
+        return true;
+      })
       .sort((a, b) => b.PointsAfterPickup - a.PointsAfterPickup)
       .slice(0, 20);
-  }, [rows, excludeKDST]);
+  }, [rows, excludeKDST, excludeQB]);
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Best Waiver Pickups</h1>
-        <Link href="/" className="text-sm underline">← Back to Dashboard</Link>
+        <Link href="/" className="text-sm underline">
+          ← Back to Dashboard
+        </Link>
       </div>
 
-      {/* Controls */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4">
+      {/* Filter Controls */}
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-3 mb-4">
         <div className="flex items-center gap-2">
           <label className="text-sm w-20">Season</label>
           <select
             className="border rounded px-2 py-1 w-full"
             value={year}
-            onChange={(e) => setYear(e.target.value === "ALL" ? "ALL" : Number(e.target.value))}
+            onChange={(e) =>
+              setYear(e.target.value === "ALL" ? "ALL" : Number(e.target.value))
+            }
           >
             <option value="ALL">All</option>
             {years.map((y) => (
-              <option key={y} value={y}>{y}</option>
+              <option key={y} value={y}>
+                {y}
+              </option>
             ))}
           </select>
         </div>
@@ -164,6 +172,15 @@ export default function WaiversPage() {
           />
         </div>
 
+        <div className="flex items-center gap-2">
+          <label className="text-sm w-20">No QB</label>
+          <input
+            type="checkbox"
+            checked={excludeQB}
+            onChange={(e) => setExcludeQB(e.target.checked)}
+          />
+        </div>
+
         <div className="md:col-span-2 flex items-center gap-2">
           <label className="text-sm w-20">Search</label>
           <input
@@ -177,19 +194,31 @@ export default function WaiversPage() {
 
       {/* All-Time Top Box */}
       <div className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Top Waiver Pickups (All-Time)</h2>
+        <h2 className="text-lg font-semibold mb-2">
+          Top Waiver Pickups (All-Time)
+        </h2>
         <div className="overflow-x-auto">
           <table className="w-full border border-gray-300 text-sm">
             <thead>
               <tr className="bg-gray-100">
-                <th className="border px-2 py-1 text-center">Year</th>
-                <th className="border px-2 py-1 text-center">Owner</th>
-                <th className="border px-2 py-1 text-center">Player</th>
-                <th className="border px-2 py-1 text-center">Pos</th>
-                <th className="border px-2 py-1 text-center">FirstW</th>
-                <th className="border px-2 py-1 text-center">Weeks</th>
-                <th className="border px-2 py-1 text-center">Points</th>
-                <th className="border px-2 py-1 text-center">Drafted?</th>
+                {[
+                  "Year",
+                  "Owner",
+                  "Player",
+                  "Pos",
+                  "FirstWeek",
+                  "WeeksPlayed",
+                  "PointsAfterPickup",
+                  "AvgPoints",
+                ].map((col) => (
+                  <th
+                    key={col}
+                    className="border px-2 py-1 text-center cursor-pointer hover:bg-gray-200"
+                    onClick={() => handleSort(col)}
+                  >
+                    {col} {sortCol === col ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -198,26 +227,38 @@ export default function WaiversPage() {
                   <td className="border px-2 py-1 text-center">{r.Year}</td>
                   <td className="border px-2 py-1 text-center">{r.Owner}</td>
                   <td className="border px-2 py-1 text-center">{r.Player}</td>
-                  <td className="border px-2 py-1 text-center">{r.Pos || "-"}</td>
+                  <td className="border px-2 py-1 text-center">{r.Pos}</td>
                   <td className="border px-2 py-1 text-center">{r.FirstWeek}</td>
                   <td className="border px-2 py-1 text-center">{r.WeeksPlayed}</td>
-                  <td className="border px-2 py-1 text-center">{r.PointsAfterPickup.toFixed(2)}</td>
                   <td className="border px-2 py-1 text-center">
-                    {r.WasDrafted === "Y" ? `Yes (${r.DraftOwner || "?"})` : "No"}
+                    {r.PointsAfterPickup.toFixed(1)}
+                  </td>
+                  <td className="border px-2 py-1 text-center">
+                    {r.AvgPoints.toFixed(1)}
                   </td>
                 </tr>
               ))}
               {topAllTime.length === 0 && (
-                <tr><td className="border px-2 py-3 text-center" colSpan={8}>No data</td></tr>
+                <tr>
+                  <td className="border px-2 py-3 text-center" colSpan={8}>
+                    No data
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Main Table */}
-      <h2 className="text-lg font-semibold mb-2">Pickups {year === "ALL" ? "(All Seasons)" : `(${year})`}</h2>
-      {error && <div className="mb-4 p-3 border border-red-300 bg-red-50 rounded text-sm">{error}</div>}
+      {/* Full Table */}
+      <h2 className="text-lg font-semibold mb-2">
+        Pickups {year === "ALL" ? "(All Seasons)" : `(${year})`}
+      </h2>
+      {error && (
+        <div className="mb-4 p-3 border border-red-300 bg-red-50 rounded text-sm">
+          {error}
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full border border-gray-300 text-sm">
           <thead>
@@ -230,19 +271,12 @@ export default function WaiversPage() {
                 { key: "FirstWeek", label: "FirstW" },
                 { key: "WeeksPlayed", label: "Weeks" },
                 { key: "PointsAfterPickup", label: "Points" },
-                { key: "WasDrafted", label: "Drafted?" },
-                { key: "DraftOwner", label: "DraftOwner" },
+                { key: "AvgPoints", label: "Avg" },
               ].map((c) => (
                 <th
                   key={c.key}
                   className="border px-2 py-1 text-center hover:bg-gray-200"
-                  onClick={() => {
-                    if (sortCol === c.key) setSortAsc(!sortAsc);
-                    else {
-                      setSortCol(c.key);
-                      setSortAsc(c.key === "Owner" || c.key === "Player" || c.key === "DraftOwner");
-                    }
-                  }}
+                  onClick={() => handleSort(c.key)}
                 >
                   {c.label} {sortCol === c.key ? (sortAsc ? "▲" : "▼") : ""}
                 </th>
@@ -255,16 +289,23 @@ export default function WaiversPage() {
                 <td className="border px-2 py-1 text-center">{r.Year}</td>
                 <td className="border px-2 py-1 text-center">{r.Owner}</td>
                 <td className="border px-2 py-1 text-center">{r.Player}</td>
-                <td className="border px-2 py-1 text-center">{r.Pos || "-"}</td>
+                <td className="border px-2 py-1 text-center">{r.Pos}</td>
                 <td className="border px-2 py-1 text-center">{r.FirstWeek}</td>
                 <td className="border px-2 py-1 text-center">{r.WeeksPlayed}</td>
-                <td className="border px-2 py-1 text-center">{r.PointsAfterPickup.toFixed(2)}</td>
-                <td className="border px-2 py-1 text-center">{r.WasDrafted}</td>
-                <td className="border px-2 py-1 text-center">{r.DraftOwner || "-"}</td>
+                <td className="border px-2 py-1 text-center">
+                  {r.PointsAfterPickup.toFixed(1)}
+                </td>
+                <td className="border px-2 py-1 text-center">
+                  {r.AvgPoints.toFixed(1)}
+                </td>
               </tr>
             ))}
             {sorted.length === 0 && (
-              <tr><td className="border px-2 py-3 text-center" colSpan={9}>No rows</td></tr>
+              <tr>
+                <td className="border px-2 py-3 text-center" colSpan={8}>
+                  No rows
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
