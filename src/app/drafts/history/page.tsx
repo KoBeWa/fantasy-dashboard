@@ -119,6 +119,7 @@ export default function DraftHistoryPage() {
   const [compareMode, setCompareMode] = useState<boolean>(true);
   const [sortCol, setSortCol] = useState<string>("Pick");
   const [sortAsc, setSortAsc] = useState<boolean>(true);
+  const [query, setQuery] = useState<string>("");
 
   // 1) Scores laden
   useEffect(() => {
@@ -206,6 +207,7 @@ export default function DraftHistoryPage() {
       const a = byComposite.get(key) ?? [];
       a.push(s);
       byComposite.set(key, a);
+
       const b = byPick.get(s.Pick) ?? [];
       b.push(s);
       byPick.set(s.Pick, b);
@@ -266,20 +268,47 @@ export default function DraftHistoryPage() {
     return ys;
   }, [scores]);
 
+  // ---------- FILTER ----------
+  const filteredRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return joined;
+    return joined.filter((r) => {
+      return (
+        r.Player.toLowerCase().includes(q) ||
+        r.Manager.toLowerCase().includes(q) ||
+        r.Pos.toLowerCase().includes(q) ||
+        r.Pick.toLowerCase().includes(q)
+      );
+    });
+  }, [joined, query]);
+
   // ---------- SORTING ----------
   const sortedRows = useMemo(() => {
-    const sorted = [...joined];
+    const sorted = [...filteredRows];
     sorted.sort((a, b) => {
       const valA: any = (a as any)[sortCol];
       const valB: any = (b as any)[sortCol];
-      const cmp =
-        typeof valA === "number" && typeof valB === "number"
-          ? valA - valB
-          : String(valA ?? "").localeCompare(String(valB ?? ""));
+
+      // Numerische Spalten explizit numerisch vergleichen
+      const numericCols = new Set(["Score", "DraftPos", "FinalPos", "DeltaPos", "Round"]);
+      const isNum = numericCols.has(sortCol);
+
+      let cmp: number;
+      if (isNum) {
+        const na = Number(valA ?? Number.NaN);
+        const nb = Number(valB ?? Number.NaN);
+        // NaN sollen nach unten rutschen
+        if (!Number.isFinite(na) && !Number.isFinite(nb)) cmp = 0;
+        else if (!Number.isFinite(na)) cmp = 1;
+        else if (!Number.isFinite(nb)) cmp = -1;
+        else cmp = na - nb;
+      } else {
+        cmp = String(valA ?? "").localeCompare(String(valB ?? ""), undefined, { numeric: true });
+      }
       return sortAsc ? cmp : -cmp;
     });
     return sorted;
-  }, [joined, sortCol, sortAsc]);
+  }, [filteredRows, sortCol, sortAsc]);
 
   const handleSort = (col: string) => {
     if (sortCol === col) setSortAsc(!sortAsc);
@@ -292,16 +321,25 @@ export default function DraftHistoryPage() {
   // ---------- RENDER ----------
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <h1 className="text-2xl font-bold">Draft History</h1>
-        <label className="flex items-center gap-2 text-sm">
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={compareMode}
+              onChange={(e) => setCompareMode(e.target.checked)}
+            />
+            Compare Mode (Δ & Heatmap)
+          </label>
           <input
-            type="checkbox"
-            checked={compareMode}
-            onChange={(e) => setCompareMode(e.target.checked)}
+            type="text"
+            placeholder="Suche: Player / Manager / Pos / Pick…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="border rounded px-3 py-1 text-sm"
           />
-          Compare Mode (Δ & Heatmap)
-        </label>
+        </div>
       </div>
 
       <div className="mb-4 flex items-center gap-2">
@@ -347,8 +385,7 @@ export default function DraftHistoryPage() {
                     className="border px-2 py-1 text-center hover:bg-gray-200"
                     onClick={() => handleSort(col.key)}
                   >
-                    {col.label}{" "}
-                    {sortCol === col.key ? (sortAsc ? "▲" : "▼") : ""}
+                    {col.label} {sortCol === col.key ? (sortAsc ? "▲" : "▼") : ""}
                   </th>
                 ))}
               </tr>
