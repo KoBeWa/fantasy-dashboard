@@ -42,6 +42,13 @@ type JoinedRow = {
   heat?: string;
 };
 
+type OwnerSummaryRow = {
+  Owner: string;
+  Picks: number;
+  SumScore: number; // Summe aller vorhandenen Scores
+  AvgScore: number; // Durchschnitt über vorhandene Scores
+};
+
 // ---------- Utils ----------
 function parseTSV<T extends Record<string, any>>(text: string): T[] {
   const lines = text.trim().split(/\r?\n/);
@@ -84,6 +91,7 @@ function pickLabel(round: number, pir: number) {
   return `${round}.${String(pir).padStart(2, "0")}`;
 }
 
+// Draft-Positionsränge je Position zählen (RB1, WR12, …)
 function computeDraftPosRanks(rows: DraftRow[]): Map<number, number> {
   const sortedIdx = rows
     .map((r, i) => ({ i, ov: r.Overall }))
@@ -117,8 +125,15 @@ export default function DraftHistoryPage() {
   const [draft, setDraft] = useState<DraftRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [compareMode, setCompareMode] = useState<boolean>(true);
+
+  // Sortierung unten (Pick-Liste)
   const [sortCol, setSortCol] = useState<string>("Pick");
   const [sortAsc, setSortAsc] = useState<boolean>(true);
+
+  // Sortierung oben (Owner-Gesamtranking)
+  const [sumSortCol, setSumSortCol] = useState<string>("SumScore");
+  const [sumSortAsc, setSumSortAsc] = useState<boolean>(false); // Desc default
+
   const [query, setQuery] = useState<string>("");
 
   // 1) Scores laden
@@ -155,7 +170,9 @@ export default function DraftHistoryPage() {
         setRankings(rows);
       })
       .catch(() =>
-        setError("Konnte season_pos_rankings.csv nicht laden (public/data/league/season_pos_rankings.csv).")
+        setError(
+          "Konnte season_pos_rankings.csv nicht laden (public/data/league/season_pos_rankings.csv)."
+        )
       );
   }, []);
 
@@ -183,7 +200,9 @@ export default function DraftHistoryPage() {
         setDraft(rows);
       })
       .catch(() =>
-        setError(`Draft-Datei für ${year} nicht gefunden. Stelle sicher, dass sie unter public/data/drafts/${year}-draft.tsv liegt.`)
+        setError(
+          `Draft-Datei für ${year} nicht gefunden. Stelle sicher, dass sie unter public/data/drafts/${year}-draft.tsv liegt.`
+        )
       );
   }, [year]);
 
@@ -196,8 +215,10 @@ export default function DraftHistoryPage() {
     return m;
   }, [rankings]);
 
+  // Joined Pick-Liste
   const joined = useMemo<JoinedRow[]>(() => {
     if (!draft || !scores || !year) return [];
+
     const yearScores = scores.filter((s) => s.Year === year);
     const byComposite = new Map<string, ScoreRow[]>();
     const byPick = new Map<number, ScoreRow[]>();
@@ -234,6 +255,7 @@ export default function DraftHistoryPage() {
 
       const rKey = `${year}__${d.Pos}__${normName(d.Player)}`;
       const finalPos = rankIndex.get(rKey) ?? null;
+
       const draftPos = draftPosRanks.get(idx);
       const deltaPos =
         Number.isFinite(draftPos as any) && finalPos !== null
@@ -268,7 +290,62 @@ export default function DraftHistoryPage() {
     return ys;
   }, [scores]);
 
-  // ---------- FILTER ----------
+  // ---------- OWNER SUMMARY (oben) ----------
+  const ownerSummary = useMemo<OwnerSummaryRow[]>(() => {
+    if (!joined.length) return [];
+    const map = new Map<string, { picks: number; sum: number; countScored: number }>();
+    for (const r of joined) {
+      // Picks zählen immer (auch ohne Score), für Summe/Avg nur gültige Scores nutzen
+      const entry = map.get(r.Manager) ?? { picks: 0, sum: 0, countScored: 0 };
+      entry.picks += 1;
+      if (Number.isFinite(r.Score as any)) {
+        entry.sum += Number(r.Score);
+        entry.countScored += 1;
+      }
+      map.set(r.Manager, entry);
+    }
+    const rows: OwnerSummaryRow[] = Array.from(map.entries()).map(([Owner, v]) => ({
+      Owner,
+      Picks: v.picks,
+      SumScore: v.sum,
+      AvgScore: v.countScored ? v.sum / v.countScored : 0,
+    }));
+    return rows;
+  }, [joined]);
+
+  // Sortierung Owner Summary
+  const sortedOwnerSummary = useMemo(() => {
+    const sorted = [...ownerSummary];
+    sorted.sort((a, b) => {
+      const valA: any = (a as any)[sumSortCol];
+      const valB: any = (b as any)[sumSortCol];
+      const numericCols = new Set(["Picks", "SumScore", "AvgScore"]);
+      const isNum = numericCols.has(sumSortCol);
+      let cmp: number;
+      if (isNum) {
+        const na = Number(valA ?? Number.NaN);
+        const nb = Number(valB ?? Number.NaN);
+        if (!Number.isFinite(na) && !Number.isFinite(nb)) cmp = 0;
+        else if (!Number.isFinite(na)) cmp = 1;
+        else if (!Number.isFinite(nb)) cmp = -1;
+        else cmp = na - nb;
+      } else {
+        cmp = String(valA ?? "").localeCompare(String(valB ?? ""), undefined, { numeric: true });
+      }
+      return sumSortAsc ? cmp : -cmp;
+    });
+    return sorted;
+  }, [ownerSummary, sumSortCol, sumSortAsc]);
+
+  const handleOwnerSort = (col: string) => {
+    if (sumSortCol === col) setSumSortAsc(!sumSortAsc);
+    else {
+      setSumSortCol(col);
+      setSumSortAsc(col === "Owner"); // Namen default aufsteigend, Zahlen absteigend
+    }
+  };
+
+  // ---------- FILTER (unten) ----------
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return joined;
@@ -282,14 +359,12 @@ export default function DraftHistoryPage() {
     });
   }, [joined, query]);
 
-  // ---------- SORTING ----------
+  // ---------- SORTING (unten) ----------
   const sortedRows = useMemo(() => {
     const sorted = [...filteredRows];
     sorted.sort((a, b) => {
       const valA: any = (a as any)[sortCol];
       const valB: any = (b as any)[sortCol];
-
-      // Numerische Spalten explizit numerisch vergleichen
       const numericCols = new Set(["Score", "DraftPos", "FinalPos", "DeltaPos", "Round"]);
       const isNum = numericCols.has(sortCol);
 
@@ -297,7 +372,6 @@ export default function DraftHistoryPage() {
       if (isNum) {
         const na = Number(valA ?? Number.NaN);
         const nb = Number(valB ?? Number.NaN);
-        // NaN sollen nach unten rutschen
         if (!Number.isFinite(na) && !Number.isFinite(nb)) cmp = 0;
         else if (!Number.isFinite(na)) cmp = 1;
         else if (!Number.isFinite(nb)) cmp = -1;
@@ -342,6 +416,7 @@ export default function DraftHistoryPage() {
         </div>
       </div>
 
+      {/* Year Picker */}
       <div className="mb-4 flex items-center gap-2">
         <label className="text-sm font-medium">Season:</label>
         <select
@@ -357,8 +432,54 @@ export default function DraftHistoryPage() {
         </select>
       </div>
 
-      {error && <div className="mb-4 p-3 border border-red-300 bg-red-50 rounded text-sm">{error}</div>}
+      {/* ----- Owner Gesamtranking (oben) ----- */}
+      {sortedOwnerSummary.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold mb-2">Gesamtranking (Draft {year})</h2>
+          <table className="w-full border border-gray-300 text-sm">
+            <thead>
+              <tr className="bg-gray-100 cursor-pointer select-none">
+                {[
+                  { key: "Owner", label: "Owner" },
+                  { key: "Picks", label: "Picks" },
+                  { key: "SumScore", label: "SumScore" },
+                  { key: "AvgScore", label: "AvgScore" },
+                ].map((col) => (
+                  <th
+                    key={col.key}
+                    className="border px-2 py-1 text-center hover:bg-gray-200"
+                    onClick={() => handleOwnerSort(col.key)}
+                  >
+                    {col.label}{" "}
+                    {sumSortCol === col.key ? (sumSortAsc ? "▲" : "▼") : ""}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedOwnerSummary.map((r, i) => (
+                <tr key={r.Owner} className={`odd:bg-white even:bg-gray-50`}>
+                  <td className="border px-2 py-1 text-center">{r.Owner}</td>
+                  <td className="border px-2 py-1 text-center">{r.Picks}</td>
+                  <td className="border px-2 py-1 text-center">{r.SumScore.toFixed(2)}</td>
+                  <td className="border px-2 py-1 text-center">{r.AvgScore.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-xs text-gray-600 mt-1">
+            Ranking standardmäßig nach <b>SumScore</b> (absteigend).
+          </div>
+        </div>
+      )}
 
+      {error && (
+        <div className="mb-4 p-3 border border-red-300 bg-red-50 rounded text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* ----- Pick-Liste (unten) ----- */}
       {!draft ? (
         <div className="p-4">Lade Draft {year}…</div>
       ) : (
@@ -432,6 +553,16 @@ export default function DraftHistoryPage() {
               ))}
             </tbody>
           </table>
+
+          {compareMode && (
+            <div className="mt-3 text-xs text-gray-600">
+              <div className="inline-flex items-center gap-2">
+                <span className="px-2 py-1 bg-red-100 border rounded">schwacher Pick (Runden-Vergleich)</span>
+                <span className="px-2 py-1 bg-green-100 border rounded">starker Pick (Runden-Vergleich)</span>
+                <span className="ml-3">ΔPos = DraftPos − FinalPos (positiv = Steal)</span>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
